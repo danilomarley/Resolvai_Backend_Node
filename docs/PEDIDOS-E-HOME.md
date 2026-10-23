@@ -135,7 +135,7 @@ Chat com IA da tela "Criar pedido" (#69). A API não guarda histórico: o front 
 
 `scope` usa as mesmas chaves do corpo de `POST /api/v1/orders` e omite o que ainda não foi informado; `urgencia` só aparece com um dos valores do formulário (`Urgente`, `Nos próximos dias`, `Pode esperar`). `complete` fica `true` quando categoria, descrição e localização já foram informadas. O pedido só é criado quando o cliente confirma o formulário.
 
-O assistente usa a API do Claude (`ANTHROPIC_API_KEY`, modelo `ANTHROPIC_MODEL`, padrão `claude-opus-5-5`). Sem chave, ou com o serviço indisponível, a rota responde 503. Cada usuário pode enviar até 30 mensagens a cada 10 minutos.
+O assistente usa a API do Claude (`ANTHROPIC_API_KEY`, modelo `ANTHROPIC_MODEL`, padrão `claude-haiku-5-5`, o mais barato). Sem chave, ou com o serviço indisponível, a rota responde 503. Cada usuário pode enviar até 30 mensagens a cada 10 minutos.
 
 ## GET /api/v1/orders/{id}
 

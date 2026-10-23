@@ -20,7 +20,7 @@ const envSchema = z.object({
   SUPABASE_STORAGE_BUCKET: z.string().trim().min(1).default('pedidos'),
   // Opcional: sem chave, o chat de criação de pedido (#69) responde 503 e o resto da API funciona.
   ANTHROPIC_API_KEY: z.string().trim().optional(),
-  ANTHROPIC_MODEL: z.string().trim().min(1).default('claude-opus-5-5'),
+  ANTHROPIC_MODEL: z.string().trim().min(1).default('claude-haiku-5-5'),
   CORS_ALLOWED_ORIGINS: z
     .string()
     .default('')

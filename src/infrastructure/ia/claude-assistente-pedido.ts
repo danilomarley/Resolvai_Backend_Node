@@ -83,8 +83,10 @@ export class ClaudeAssistentePedido implements IAssistentePedido {
         // Conversa simples: esforço baixo responde rápido e gasta menos.
         output_config: { effort: 'low', format: betaZodOutputFormat(respostaSchema) },
         // Se o modelo recusar por política de segurança, a própria API tenta de novo em outro modelo.
-        betas: ['server-side-fallback-2026-07-01'],
-        fallbacks: 'default'
+        // O Haiku não tem esse fallback no servidor, então o parâmetro só vai para os outros modelos.
+        ...(this.options.model.startsWith('claude-haiku')
+          ? {}
+          : { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const })
       });
     } catch (error) {
       if (error instanceof Anthropic.RateLimitError) {
