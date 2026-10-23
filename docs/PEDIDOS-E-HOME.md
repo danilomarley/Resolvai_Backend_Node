@@ -114,6 +114,28 @@ As chaves de texto vão para `pedidos.escopo` e cada foto vira uma linha em `fot
 
 Retorna 400 quando o corpo é inválido, quando o cadastro ainda não foi finalizado (sem CPF) ou quando o usuário não é Cliente.
 
+## POST /api/v1/orders/photos
+
+Envia uma foto antes de criar o pedido (#67). O corpo é `multipart/form-data` com o arquivo no campo `foto`: JPG, PNG ou WEBP, até 5 MB, uma foto por requisição. O tipo é conferido pelo conteúdo do arquivo, não só pelo `Content-Type`. Exige cadastro finalizado e papel Cliente.
+
+A API grava em `{bucket}/{id do usuário}/{uuid}.{ext}` no Supabase Storage (bucket `pedidos`, criado pelo script 012) e responde 201 com `{ "url": "..." }`. Essa URL vai em `fotos[].url` de `POST /api/v1/orders` (até 4 fotos).
+
+## POST /api/v1/orders/assistant
+
+Chat com IA da tela "Criar pedido" (#69). A API não guarda histórico: o front envia a conversa inteira em `messages` (`role` `user` ou `assistant`, até 30 mensagens de até 2000 caracteres, começando e terminando com `user`).
+
+```json
+{
+  "reply": "Em qual bairro e cidade fica o imóvel?",
+  "scope": { "categoria": "Impermeabilização", "descricao": "Pinga água do teto do banheiro quando chove." },
+  "complete": false
+}
+```
+
+`scope` usa as mesmas chaves do corpo de `POST /api/v1/orders` e omite o que ainda não foi informado; `urgencia` só aparece com um dos valores do formulário (`Urgente`, `Nos próximos dias`, `Pode esperar`). `complete` fica `true` quando categoria, descrição e localização já foram informadas. O pedido só é criado quando o cliente confirma o formulário.
+
+O assistente usa a API do Claude (`ANTHROPIC_API_KEY`, modelo `ANTHROPIC_MODEL`, padrão `claude-opus-5-5`). Sem chave, ou com o serviço indisponível, a rota responde 503. Cada usuário pode enviar até 30 mensagens a cada 10 minutos.
+
 ## GET /api/v1/orders/{id}
 
 Retorna os campos da listagem, exceto os dois de propostas, e acrescenta:

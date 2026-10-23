@@ -70,6 +70,55 @@ Content-Type: application/json
   ]
 }
 
+### Perfil: dados da conta, endereço e contato principais
+GET {{host}}/api/v1/users/me/profile
+Authorization: Bearer {{token}}
+
+### Perfil: altera só o que mudou (o CPF não muda)
+PATCH {{host}}/api/v1/users/me/profile
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Maria S. Souza",
+  "contato": { "tipo": "whatsapp", "valor": "85999999999" }
+}
+
+### Envia uma foto do pedido (devolve a URL para fotos[].url)
+POST {{host}}/api/v1/orders/photos
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=resolvai
+
+--resolvai
+Content-Disposition: form-data; name="foto"; filename="laje.jpg"
+Content-Type: image/jpeg
+
+< ./laje.jpg
+--resolvai--
+
+### Chat com IA para montar o pedido (envie a conversa inteira)
+POST {{host}}/api/v1/orders/assistant
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "messages": [
+    { "role": "user", "content": "Está pingando água do teto do banheiro quando chove." }
+  ]
+}
+
+### Recuperação de senha, etapa 1
+POST {{host}}/api/v1/auth/check-email
+Content-Type: application/json
+
+{ "email": "maria.souza@example.com" }
+
+### Recuperação de senha, etapa 2
+POST {{host}}/api/v1/auth/reset-password
+Content-Type: application/json
+
+{ "email": "maria.souza@example.com", "newPassword": "NovaSenhaForte123" }
+
 ### Seus Pedidos: lista paginada (status, page e pageSize são opcionais)
 GET {{host}}/api/v1/orders?page=1&pageSize=10
 Authorization: Bearer {{token}}

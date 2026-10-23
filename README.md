@@ -33,6 +33,8 @@ Todas as variáveis estão em [.env.example](.env.example). A API valida tudo na
 | `DATABASE_COMMAND_TIMEOUT_SECONDS` | `Database:CommandTimeoutSeconds` |
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_AUDIENCE` | Seção `Supabase` |
 | `CORS_ALLOWED_ORIGINS` | `Cors:AllowedOrigins`, separado por vírgula |
+| `SUPABASE_STORAGE_BUCKET` | Novo: bucket das fotos dos pedidos (padrão `pedidos`) |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Novo: chat de IA da criação de pedido; opcional |
 
 O repositório é público: **nunca versione o `.env`** (ele já está no `.gitignore`). Em produção, configure as variáveis no provedor de deploy.
 
@@ -69,8 +71,12 @@ tests/                 Vitest
 | --- | --- | --- |
 | POST | `/api/v1/auth/login` | público |
 | POST | `/api/v1/auth/register` | público |
+| POST | `/api/v1/auth/check-email` | público (recuperação de senha, #70) |
+| POST | `/api/v1/auth/reset-password` | público (recuperação de senha, #70) |
 | GET | `/api/v1/users/me` | autenticado |
 | POST | `/api/v1/users/me/complete-registration` | autenticado |
+| GET | `/api/v1/users/me/profile` | autenticado (#61) |
+| PATCH | `/api/v1/users/me/profile` | autenticado (#61) |
 | GET | `/api/v1/users` | Admin |
 | GET | `/api/v1/users/{id}` | Admin |
 | POST | `/api/v1/users` | Admin |
@@ -78,6 +84,10 @@ tests/                 Vitest
 | GET | `/api/v1/orders` | autenticado |
 | POST | `/api/v1/orders` | autenticado (Cliente com cadastro finalizado) |
 | GET | `/api/v1/orders/{id}` | autenticado |
+| POST | `/api/v1/orders/photos` | autenticado, multipart (Cliente com cadastro finalizado, #67) |
+| POST | `/api/v1/orders/assistant` | autenticado (chat com IA, #69) |
 | GET | `/api/v1/home/summary` | autenticado |
 
-Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md). Exemplos de requisição em [requests.http](requests.http). O que mudou em relação à API C# está em [docs/MIGRACAO.md](docs/MIGRACAO.md).
+Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md). Exemplos de requisição em [requests.http](requests.http). O que mudou em relação à API C# está em [docs/MIGRACAO.md](docs/MIGRACAO.md). O deploy no Render está em [docs/DEPLOY.md](docs/DEPLOY.md).
+
+A recuperação de senha segue o fluxo definido na #70: informa o e-mail e define a nova senha, sem confirmação por e-mail. Quem souber o e-mail de uma conta consegue trocar a senha dela; as rotas têm limite de tentativas por IP e por e-mail para reduzir abuso.

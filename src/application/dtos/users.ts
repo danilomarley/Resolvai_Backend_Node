@@ -76,3 +76,46 @@ export const completeRegistrationRequestSchema = z.object({
 });
 
 export type CompleteRegistrationRequest = z.output<typeof completeRegistrationRequestSchema>;
+
+export const enderecoResponseSchema = z.object({
+  logradouro: z.string(),
+  numero: z.string().optional(),
+  complemento: z.string().optional(),
+  bairro: z.string().optional(),
+  cidade: z.string(),
+  estado: z.string(),
+  cep: z.string(),
+  apelido: z.string().optional()
+});
+
+export const contatoResponseSchema = z.object({
+  tipo: z.string(),
+  valor: z.string()
+});
+
+/**
+ * Dados da conta com o endereço e o contato principais, usados nas configurações da conta.
+ */
+export const perfilResponseSchema = z.object({
+  user: userResponseSchema,
+  endereco: enderecoResponseSchema.optional(),
+  contato: contatoResponseSchema.optional()
+});
+
+export type PerfilResponse = z.infer<typeof perfilResponseSchema>;
+
+/**
+ * Alteração dos dados da conta. Todos os campos são opcionais, mas ao menos um precisa ser enviado.
+ * O CPF não pode ser alterado depois da finalização do cadastro.
+ */
+export const atualizarPerfilRequestSchema = z
+  .object({
+    name: textoObrigatorio('Name', 200).optional(),
+    endereco: enderecoRequestSchema.optional(),
+    contato: contatoRequestSchema.optional()
+  })
+  .refine(dados => dados.name !== undefined || dados.endereco !== undefined || dados.contato !== undefined, {
+    message: 'Informe ao menos um dado para alterar: name, endereco ou contato.'
+  });
+
+export type AtualizarPerfilRequest = z.output<typeof atualizarPerfilRequestSchema>;

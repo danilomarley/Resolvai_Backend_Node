@@ -11,7 +11,10 @@ import { SignJWT } from 'jose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/api/app.js';
 import { criarVerificadorDeToken } from '../src/api/authentication.js';
+import { ServicoIndisponivelException } from '../src/application/errors.js';
+import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
+import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { createDatabase, type Database } from '../src/infrastructure/database.js';
@@ -20,7 +23,7 @@ import { EnderecoRepository } from '../src/infrastructure/repositories/endereco-
 import { PedidoQueries } from '../src/infrastructure/repositories/pedido-queries.js';
 import { PedidoRepository } from '../src/infrastructure/repositories/pedido-repository.js';
 import { UserRepository } from '../src/infrastructure/repositories/user-repository.js';
-import { FakeSupabase } from './fakes.js';
+import { FakeArmazenamento, FakeAssistente, FakeSupabase } from './fakes.js';
 
 // PostgreSQL real (PGlite, em memória) com os mesmos scripts de db/scripts, acessado pelo driver pg da API.
 const issuer = 'https://projeto-teste.supabase.co/auth/v1';
@@ -61,12 +64,23 @@ describe('Integração com PostgreSQL', () => {
   let servidor: PGLiteSocketServer;
   let database: Database;
   let app: FastifyInstance;
+  const supabase = new FakeSupabase();
+  const armazenamento = new FakeArmazenamento();
+  const assistente = new FakeAssistente();
 
-  const chamar = async (method: 'GET' | 'POST' | 'PATCH', url: string, sub: string, payload?: unknown) =>
-    app.inject({ method, url, payload: payload as object, headers: { authorization: `Bearer ${await token(sub)}` } });
+  const chamar = async (method: 'GET' | 'POST' | 'PATCH', url: string, sub: string, payload?: unknown, email?: string) =>
+    app.inject({ method, url, payload: payload as object, headers: { authorization: `Bearer ${await token(sub, email)}` } });
 
   beforeAll(async () => {
     pglite = await PGlite.create({ extensions: { citext, pgcrypto } });
+
+    // O Supabase já traz o schema storage; aqui basta o mínimo que o script 012 usa.
+    await pglite.exec(`
+      create schema if not exists storage;
+      create table if not exists storage.buckets (
+        id text primary key, name text not null, public boolean, file_size_limit bigint, allowed_mime_types text[]
+      );
+    `);
 
     const pasta = join(import.meta.dirname, '..', 'db', 'scripts');
     for (const arquivo of readdirSync(pasta).filter(nome => nome.endsWith('.sql')).sort()) {
@@ -114,7 +128,6 @@ describe('Integração com PostgreSQL', () => {
     });
 
     const users = new UserRepository(database);
-    const supabase = new FakeSupabase();
     app = await buildApp({
       logger: process.env.DEBUG_LOG ? { level: 'error' } : false,
       dependencias: {
@@ -122,6 +135,8 @@ describe('Integração com PostgreSQL', () => {
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
+        fotoPedidoService: new FotoPedidoService(armazenamento, users),
+        assistentePedidoService: new AssistentePedidoService(assistente),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
       }
     });
@@ -294,5 +309,190 @@ describe('Integração com PostgreSQL', () => {
       payload: { name: 'Carla', email: 'MARIA@teste.com', password: 'SenhaForte123' }
     });
     expect(repetido.statusCode).toBe(409);
+  });
+
+  describe('perfil (#61)', () => {
+    const payload = {
+      name: 'Perfil Cliente',
+      cpf: '444.444.444-44',
+      endereco: { logradouro: 'Rua B', numero: '20', bairro: 'Meireles', cidade: 'Fortaleza', estado: 'CE', cep: '60100-000' },
+      contato: { tipo: 'telefone', valor: '85988887777' }
+    };
+
+    it('consulta e altera nome, endereço e contato sem mudar o CPF', async () => {
+      const id = randomUUID();
+      expect((await chamar('POST', '/api/v1/users/me/complete-registration', id, payload, 'perfil@teste.com')).statusCode).toBe(200);
+
+      const emailDeOutro = await chamar('POST', '/api/v1/users/me/complete-registration', randomUUID(), payload, 'perfil@teste.com');
+      expect(emailDeOutro.statusCode).toBe(409);
+
+      const perfil = (await chamar('GET', '/api/v1/users/me/profile', id)).json();
+      expect(perfil).toMatchObject({
+        user: { id, name: 'Perfil Cliente', cpf: '44444444444' },
+        endereco: { logradouro: 'Rua B', numero: '20', cep: '60100000', estado: 'CE' },
+        contato: { tipo: 'telefone', valor: '85988887777' }
+      });
+      expect(perfil.endereco).not.toHaveProperty('complemento');
+
+      const alterado = await chamar('PATCH', '/api/v1/users/me/profile', id, {
+        name: '  Novo Nome ',
+        endereco: { ...payload.endereco, logradouro: 'Av. C', complemento: 'Apto 1', cep: '60200000', estado: 'sp' },
+        contato: { tipo: 'whatsapp', valor: '85911112222' }
+      });
+      expect(alterado.statusCode).toBe(200);
+      expect(alterado.json()).toMatchObject({
+        user: { name: 'Novo Nome', cpf: '44444444444' },
+        endereco: { logradouro: 'Av. C', complemento: 'Apto 1', cep: '60200000', estado: 'SP' },
+        contato: { tipo: 'whatsapp', valor: '85911112222' }
+      });
+
+      const [contagem] = await database.query<{ total: number }>(
+        'select count(*) as "total" from enderecos where id_usuario = $1',
+        [id]
+      );
+      expect(contagem?.total).toBe(1);
+    });
+
+    it('cria endereço e contato quando o usuário finalizado ainda não tem', async () => {
+      const resposta = await chamar('PATCH', '/api/v1/users/me/profile', ids.cliente, {
+        endereco: payload.endereco,
+        contato: payload.contato
+      });
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json().endereco.logradouro).toBe('Rua B');
+    });
+
+    it('exige cadastro finalizado para endereço e contato e ao menos um campo', async () => {
+      const semCpf = await chamar('PATCH', '/api/v1/users/me/profile', ids.admin, { contato: payload.contato });
+      expect(semCpf.statusCode).toBe(400);
+      expect(semCpf.json().detail).toBe('Finalize o cadastro antes de alterar endereço e contato.');
+
+      const nomeSemCpf = await chamar('PATCH', '/api/v1/users/me/profile', ids.admin, { name: 'Ana A.' });
+      expect(nomeSemCpf.statusCode).toBe(200);
+
+      const vazio = await chamar('PATCH', '/api/v1/users/me/profile', ids.admin, {});
+      expect(vazio.statusCode).toBe(400);
+    });
+  });
+
+  describe('recuperação de senha (#70)', () => {
+    const post = (url: string, payload: unknown, ip = '10.0.0.1') =>
+      app.inject({ method: 'POST', url, payload: payload as object, remoteAddress: ip });
+
+    it('confirma e-mail existente e recusa inexistente', async () => {
+      const existe = await post('/api/v1/auth/check-email', { email: 'MARIA@teste.com' });
+      expect(existe.statusCode).toBe(200);
+      expect(existe.json()).toEqual({ email: 'maria@teste.com' });
+
+      const naoExiste = await post('/api/v1/auth/check-email', { email: 'ninguem@teste.com' });
+      expect(naoExiste.statusCode).toBe(404);
+    });
+
+    it('troca a senha no Supabase Auth do usuário certo e exige 8 caracteres', async () => {
+      const curta = await post('/api/v1/auth/reset-password', { email: 'maria@teste.com', newPassword: '123' }, '10.0.0.2');
+      expect(curta.statusCode).toBe(400);
+
+      const resposta = await post('/api/v1/auth/reset-password', { email: 'maria@teste.com', newPassword: 'NovaSenha123' }, '10.0.0.2');
+      expect(resposta.statusCode).toBe(200);
+      expect(supabase.senhasAlteradas.at(-1)).toEqual({ userId: ids.cliente, password: 'NovaSenha123' });
+    });
+
+    it('limita tentativas por e-mail', async () => {
+      const ultimas = [];
+      for (let i = 0; i < 6; i++) {
+        ultimas.push(await post('/api/v1/auth/reset-password', { email: 'pedro@teste.com', newPassword: 'SenhaNova123' }, `10.0.1.${i}`));
+      }
+      expect(ultimas.slice(0, 5).every(r => r.statusCode === 200)).toBe(true);
+      expect(ultimas[5]!.statusCode).toBe(429);
+    });
+  });
+
+  describe('fotos do pedido (#67)', () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+
+    const enviar = async (sub: string, conteudo: Buffer, tipo: string) => {
+      const limite = '----resolvai';
+      const corpo = Buffer.concat([
+        Buffer.from(`--${limite}\r\nContent-Disposition: form-data; name="foto"; filename="foto"\r\nContent-Type: ${tipo}\r\n\r\n`),
+        conteudo,
+        Buffer.from(`\r\n--${limite}--\r\n`)
+      ]);
+      return app.inject({
+        method: 'POST',
+        url: '/api/v1/orders/photos',
+        payload: corpo,
+        headers: { authorization: `Bearer ${await token(sub)}`, 'content-type': `multipart/form-data; boundary=${limite}` }
+      });
+    };
+
+    it('grava a foto na pasta do cliente e devolve a URL pública', async () => {
+      const resposta = await enviar(ids.cliente, png, 'image/png');
+      expect(resposta.statusCode).toBe(201);
+      expect(resposta.json().url).toMatch(new RegExp(`/storage/v1/object/public/pedidos/${ids.cliente}/[0-9a-f-]+\\.png$`));
+      expect(armazenamento.enviados.at(-1)).toMatchObject({ contentType: 'image/png', tamanho: png.length });
+    });
+
+    it('recusa arquivo que não é imagem, mesmo com Content-Type de imagem', async () => {
+      const resposta = await enviar(ids.cliente, Buffer.from('<script>alert(1)</script>'), 'image/png');
+      expect(resposta.statusCode).toBe(400);
+      expect(resposta.json().detail).toBe('Envie uma foto JPG, PNG ou WEBP.');
+    });
+
+    it('recusa foto acima de 5 MB e cliente sem cadastro finalizado', async () => {
+      const grande = Buffer.concat([png, Buffer.alloc(5 * 1024 * 1024)]);
+      const resposta = await enviar(ids.cliente, grande, 'image/png');
+      expect(resposta.statusCode).toBe(400);
+      expect(resposta.json().detail).toBe('A foto deve ter no máximo 5 MB.');
+
+      const semCadastro = await enviar(ids.admin, png, 'image/png');
+      expect(semCadastro.statusCode).toBe(400);
+      expect(semCadastro.json().detail).toBe('Finalize o cadastro antes de enviar fotos.');
+    });
+
+    it('recusa requisição que não é multipart', async () => {
+      const resposta = await chamar('POST', '/api/v1/orders/photos', ids.cliente, { url: 'x' });
+      expect(resposta.statusCode).toBe(400);
+    });
+  });
+
+  describe('assistente de pedido (#69)', () => {
+    it('repassa a conversa e devolve resposta e escopo', async () => {
+      const resposta = await chamar('POST', '/api/v1/orders/assistant', ids.cliente, {
+        messages: [{ role: 'user', content: 'A tomada da cozinha parou de funcionar.' }]
+      });
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toEqual({
+        reply: 'Em qual bairro e cidade fica o imóvel?',
+        scope: { categoria: 'Elétrica', descricao: 'Tomada da cozinha sem energia.' },
+        complete: false
+      });
+      expect(assistente.ultimaConversa).toHaveLength(1);
+    });
+
+    it('valida a conversa', async () => {
+      const terminaComAssistente = await chamar('POST', '/api/v1/orders/assistant', ids.cliente, {
+        messages: [
+          { role: 'user', content: 'Oi' },
+          { role: 'assistant', content: 'Olá' }
+        ]
+      });
+      expect(terminaComAssistente.statusCode).toBe(400);
+    });
+
+    it('responde 503 quando o assistente está indisponível', async () => {
+      assistente.erro = new ServicoIndisponivelException('O assistente de pedidos não está configurado neste servidor.');
+      const resposta = await chamar('POST', '/api/v1/orders/assistant', ids.cliente, {
+        messages: [{ role: 'user', content: 'Preciso pintar a sala.' }]
+      });
+      assistente.erro = undefined;
+      expect(resposta.statusCode).toBe(503);
+      expect(resposta.json().detail).toBe('O assistente de pedidos não está configurado neste servidor.');
+    });
+  });
+
+  it('health check responde sem autenticação', async () => {
+    const resposta = await app.inject({ method: 'GET', url: '/health' });
+    expect(resposta.statusCode).toBe(200);
+    expect(resposta.json()).toEqual({ status: 'ok' });
   });
 });

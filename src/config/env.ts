@@ -17,6 +17,10 @@ const envSchema = z.object({
   SUPABASE_SERVICE_ROLE_KEY: texto('SUPABASE_SERVICE_ROLE_KEY'),
   SUPABASE_JWT_SECRET: texto('SUPABASE_JWT_SECRET'),
   SUPABASE_AUDIENCE: texto('SUPABASE_AUDIENCE').default('authenticated'),
+  SUPABASE_STORAGE_BUCKET: z.string().trim().min(1).default('pedidos'),
+  // Opcional: sem chave, o chat de criação de pedido (#69) responde 503 e o resto da API funciona.
+  ANTHROPIC_API_KEY: z.string().trim().optional(),
+  ANTHROPIC_MODEL: z.string().trim().min(1).default('claude-opus-5-5'),
   CORS_ALLOWED_ORIGINS: z
     .string()
     .default('')
@@ -45,6 +49,13 @@ export interface AppConfig {
     audience: string;
     /** Emissor dos tokens do GoTrue: {url}/auth/v1. */
     authIssuer: string;
+    /** Bucket público do Supabase Storage para as fotos dos pedidos. */
+    storageBucket: string;
+  };
+  /** Ausente quando ANTHROPIC_API_KEY não foi configurada. */
+  claude?: {
+    apiKey: string;
+    model: string;
   };
   corsAllowedOrigins: string[];
 }
@@ -77,8 +88,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       serviceRoleKey: e.SUPABASE_SERVICE_ROLE_KEY,
       jwtSecret: e.SUPABASE_JWT_SECRET,
       audience: e.SUPABASE_AUDIENCE,
-      authIssuer: `${supabaseUrl}/auth/v1`
+      authIssuer: `${supabaseUrl}/auth/v1`,
+      storageBucket: e.SUPABASE_STORAGE_BUCKET
     },
+    claude: e.ANTHROPIC_API_KEY ? { apiKey: e.ANTHROPIC_API_KEY, model: e.ANTHROPIC_MODEL } : undefined,
     corsAllowedOrigins: e.CORS_ALLOWED_ORIGINS
   };
 }

@@ -2,7 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
+  atualizarPerfilRequestSchema,
   completeRegistrationRequestSchema,
+  perfilResponseSchema,
   createUserRequestSchema,
   setUserStatusRequestSchema,
   userResponseSchema
@@ -87,6 +89,27 @@ export function usersRoutes(userService: UserService) {
         response: { 200: userResponseSchema }
       },
       handler: request => userService.completeRegistration(request.usuario, request.body)
+    });
+
+    rotas.get('/api/v1/users/me/profile', {
+      schema: {
+        tags: ['Users'],
+        summary: 'Dados da conta com endereço e contato principais (#61).',
+        response: { 200: perfilResponseSchema }
+      },
+      handler: request => userService.getProfile(request.usuario)
+    });
+
+    rotas.patch('/api/v1/users/me/profile', {
+      schema: {
+        tags: ['Users'],
+        summary: 'Altera nome, endereço principal e contato principal (#61).',
+        description:
+          'Envie só o que mudou (name, endereco e/ou contato). Endereço e contato exigem cadastro finalizado. O CPF não pode ser alterado.',
+        body: atualizarPerfilRequestSchema,
+        response: { 200: perfilResponseSchema }
+      },
+      handler: request => userService.updateProfile(request.usuario, request.body)
     });
   };
 }

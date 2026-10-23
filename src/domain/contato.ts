@@ -14,6 +14,13 @@ export class Contato {
     readonly principal: boolean
   ) {}
 
+  /**
+   * Reidrata um contato já persistido. Uso exclusivo da camada de persistência.
+   */
+  static restore(id: string, idUsuario: string, tipo: string, valor: string, principal: boolean): Contato {
+    return new Contato(id, idUsuario, tipo, valor, principal);
+  }
+
   static register(idUsuario: string, tipo: string, valor: string, principal: boolean): Contato {
     if (!tipo?.trim() || !(tiposContato as readonly string[]).includes(tipo)) {
       throw new DomainException("O tipo de contato deve ser 'telefone', 'whatsapp' ou 'email_alt'.");
