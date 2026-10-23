@@ -80,6 +80,7 @@ Valores inválidos retornam 400 (`ValidationProblemDetails`). Uma página além 
       "id": "10000000-0000-0000-0000-000000000002",
       "title": "Reparo hidráulico no banheiro",
       "category": "Hidráulica",
+      "location": "Meireles, Fortaleza",
       "status": "InProgress",
       "createdAt": "2026-10-06T14:00:00Z",
       "updatedAt": "2026-10-08T14:00:00Z",
@@ -94,7 +95,7 @@ Valores inválidos retornam 400 (`ValidationProblemDetails`). Uma página além 
 }
 ```
 
-`proposalsCount` conta todas as propostas recebidas pelo pedido. `chosenProposalValue` é o valor da proposta com status `escolhida` e é omitido enquanto nenhuma foi escolhida.
+`location` vem de `escopo.localizacao` e é omitido quando não foi informado. `proposalsCount` conta todas as propostas recebidas pelo pedido. `chosenProposalValue` é o valor da proposta com status `escolhida` e é omitido enquanto nenhuma foi escolhida.
 
 ## POST /api/v1/orders
 

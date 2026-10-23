@@ -167,13 +167,20 @@ describe('Integração com PostgreSQL', () => {
     expect(corpo.recentOrders.map((p: { id: string }) => p.id)).toEqual([pedido(1), pedido(2), pedido(3), pedido(4), pedido(6)]);
 
     const [primeiro, segundo, terceiro, quarto] = corpo.recentOrders;
-    expect(primeiro).toMatchObject({ title: 'Infiltração na laje', category: 'Impermeabilização', status: 'Pending', proposalsCount: 2 });
+    expect(primeiro).toMatchObject({
+      title: 'Infiltração na laje',
+      category: 'Impermeabilização',
+      location: 'Aldeota, Fortaleza',
+      status: 'Pending',
+      proposalsCount: 2
+    });
     expect(primeiro).not.toHaveProperty('updatedAt');
     expect(primeiro).not.toHaveProperty('chosenProposalValue');
     expect(segundo).toMatchObject({ title: 'Hidráulica', status: 'InProgress', chosenProposalValue: 1100.5 });
     expect(typeof segundo.updatedAt).toBe('string');
     expect(terceiro).toMatchObject({ title: 'Pedido', status: 'Completed', proposalsCount: 0 });
     expect(terceiro).not.toHaveProperty('category');
+    expect(terceiro).not.toHaveProperty('location');
     expect(quarto).toMatchObject({ title: 'Pedido', status: 'Cancelled' });
   });
 
