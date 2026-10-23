@@ -110,9 +110,20 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     return { id: body.id!.toLowerCase(), email: body.email ?? email };
   }
 
-  private send(path: string, key: string, body: unknown): Promise<Response> {
+  async adminUpdatePassword(userId: string, password: string): Promise<void> {
+    const response = await this.send(`auth/v1/admin/users/${encodeURIComponent(userId)}`, this.options.serviceRoleKey, { password }, 'PUT');
+    const payload = await response.text();
+
+    if (response.status === 422) {
+      throw new DomainException('A nova senha não atende às regras de segurança do Supabase Auth.');
+    }
+
+    ensureSuccess(response, payload, 'Falha ao redefinir a senha no Supabase Auth.');
+  }
+
+  private send(path: string, key: string, body: unknown, method = 'POST'): Promise<Response> {
     return this.fetcher(new URL(path, this.baseUrl), {
-      method: 'POST',
+      method,
       headers: {
         apikey: key,
         Authorization: `Bearer ${key}`,

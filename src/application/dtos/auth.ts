@@ -29,3 +29,19 @@ export const loginResponseSchema = z.object({
 });
 
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
+
+/**
+ * Recuperação de senha (#70): confirma que o e-mail tem conta antes de pedir a nova senha.
+ */
+export const verificarEmailRequestSchema = z.object({
+  email: obrigatorio('Email').pipe(emailAddress('Email')).pipe(textoObrigatorio('Email', 320))
+});
+
+export type VerificarEmailRequest = z.output<typeof verificarEmailRequestSchema>;
+
+export const redefinirSenhaRequestSchema = z.object({
+  email: obrigatorio('Email').pipe(emailAddress('Email')).pipe(textoObrigatorio('Email', 320)),
+  newPassword: textoObrigatorio('NewPassword', 128, 8)
+});
+
+export type RedefinirSenhaRequest = z.output<typeof redefinirSenhaRequestSchema>;

@@ -1,6 +1,7 @@
 import { Contato } from '../../domain/contato.js';
 import { Email } from '../../domain/email.js';
 import { Endereco } from '../../domain/endereco.js';
+import { DomainException } from '../../domain/errors.js';
 import { UserRole } from '../../domain/enums.js';
 import { User } from '../../domain/user.js';
 import type {
@@ -10,7 +11,13 @@ import type {
   ISupabaseAuthClient,
   IUserRepository
 } from '../contracts.js';
-import type { CompleteRegistrationRequest, CreateUserRequest, UserResponse } from '../dtos/users.js';
+import type {
+  AtualizarPerfilRequest,
+  CompleteRegistrationRequest,
+  CreateUserRequest,
+  PerfilResponse,
+  UserResponse
+} from '../dtos/users.js';
 import { ConflictException, NotFoundException, UnauthorizedException } from '../errors.js';
 import { toUserResponse } from '../mappings/user-mapper.js';
 
@@ -87,6 +94,9 @@ export class UserService {
 
     if (!user) {
       const email = Email.create(currentUser.email);
+      if (await this.userRepository.existsByEmail(email)) {
+        throw new ConflictException(`Já existe um usuário com o e-mail '${email.value}'.`);
+      }
       user = User.register(id, request.name, email, UserRole.Cliente);
       await this.userRepository.add(user);
     }
@@ -124,6 +134,84 @@ export class UserService {
 
     return toUserResponse(user);
   }
+
+  /**
+   * Dados da conta com o endereço e o contato principais (configurações da conta, #61).
+   */
+  async getProfile(currentUser: CurrentUser): Promise<PerfilResponse> {
+    const user = await this.usuarioAtual(currentUser);
+    const [endereco, contato] = await Promise.all([
+      this.enderecoRepository.getPrincipal(user.id),
+      this.contatoRepository.getPrincipal(user.id)
+    ]);
+
+    return toPerfilResponse(user, endereco, contato);
+  }
+
+  /**
+   * Altera nome, endereço principal e contato principal. O CPF não muda depois da finalização.
+   */
+  async updateProfile(currentUser: CurrentUser, request: AtualizarPerfilRequest): Promise<PerfilResponse> {
+    const user = await this.usuarioAtual(currentUser);
+
+    if ((request.endereco || request.contato) && !user.cpf?.trim()) {
+      throw new DomainException('Finalize o cadastro antes de alterar endereço e contato.');
+    }
+
+    // Valida tudo antes de gravar qualquer coisa.
+    const endereco = request.endereco
+      ? Endereco.register(user.id, {
+          ...request.endereco,
+          estado: request.endereco.estado.toUpperCase(),
+          cep: onlyDigits(request.endereco.cep),
+          principal: true
+        })
+      : null;
+    const contato = request.contato ? Contato.register(user.id, request.contato.tipo, request.contato.valor, true) : null;
+
+    if (request.name !== undefined) {
+      user.changeName(request.name);
+      await this.userRepository.update(user);
+    }
+
+    if (endereco) await this.enderecoRepository.salvarPrincipal(endereco);
+    if (contato) await this.contatoRepository.salvarPrincipal(contato);
+
+    return this.getProfile(currentUser);
+  }
+
+  private async usuarioAtual(currentUser: CurrentUser): Promise<User> {
+    const id = currentUser.id;
+    if (!id) {
+      throw new UnauthorizedException('Token sem identificação de usuário.');
+    }
+
+    const user = await this.userRepository.getById(id);
+    if (!user) {
+      throw new NotFoundException('Usuário', id);
+    }
+
+    return user;
+  }
+}
+
+function toPerfilResponse(user: User, endereco: Endereco | null, contato: Contato | null): PerfilResponse {
+  return {
+    user: toUserResponse(user),
+    endereco: endereco
+      ? {
+          logradouro: endereco.logradouro,
+          numero: endereco.numero ?? undefined,
+          complemento: endereco.complemento ?? undefined,
+          bairro: endereco.bairro ?? undefined,
+          cidade: endereco.cidade,
+          estado: endereco.estado,
+          cep: endereco.cep,
+          apelido: endereco.apelido ?? undefined
+        }
+      : undefined,
+    contato: contato ? { tipo: contato.tipo, valor: contato.valor } : undefined
+  };
 }
 
 function onlyDigits(value: string): string {

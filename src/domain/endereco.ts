@@ -32,6 +32,27 @@ export class Endereco {
     readonly principal: boolean
   ) {}
 
+  /**
+   * Reidrata um endereço já persistido. Uso exclusivo da camada de persistência.
+   */
+  static restore(id: string, idUsuario: string, dados: DadosEndereco): Endereco {
+    return new Endereco(
+      id,
+      idUsuario,
+      dados.logradouro,
+      dados.numero ?? null,
+      dados.complemento ?? null,
+      dados.bairro ?? null,
+      dados.cidade,
+      dados.estado,
+      dados.cep,
+      dados.apelido ?? null,
+      dados.latitude ?? null,
+      dados.longitude ?? null,
+      dados.principal
+    );
+  }
+
   static register(idUsuario: string, dados: DadosEndereco): Endereco {
     if (!dados.logradouro?.trim()) {
       throw new DomainException('O logradouro é obrigatório.');

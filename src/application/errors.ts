@@ -18,3 +18,23 @@ export class ConflictException extends Error {
     this.name = 'ConflictException';
   }
 }
+
+/**
+ * Dependência externa indisponível ou não configurada (vira 503).
+ */
+export class ServicoIndisponivelException extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ServicoIndisponivelException';
+  }
+}
+
+/**
+ * Limite de tentativas excedido (vira 429).
+ */
+export class MuitasTentativasException extends Error {
+  constructor(message = 'Muitas tentativas. Aguarde alguns minutos e tente novamente.') {
+    super(message);
+    this.name = 'MuitasTentativasException';
+  }
+}

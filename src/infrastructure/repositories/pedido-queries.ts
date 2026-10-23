@@ -35,6 +35,7 @@ const resumoColumns = `
   select p.id as "id",
          ${tituloColumn} as "title",
          ${categoriaColumn} as "category",
+         nullif(btrim(p.escopo ->> 'localizacao'), '') as "location",
          ${statusPedidoColumn} as "status",
          p.data_criacao as "createdAt",
          p.data_atualizacao as "updatedAt",
@@ -49,6 +50,7 @@ interface PedidoResumoRow {
   id: string;
   title: string;
   category: string | null;
+  location: string | null;
   status: StatusPedido;
   createdAt: Date;
   updatedAt: Date | null;
@@ -239,6 +241,7 @@ function toResumo(row: PedidoResumoRow): PedidoResumoResponse {
     id: row.id,
     title: row.title,
     category: opcional(row.category),
+    location: opcional(row.location),
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt?.toISOString(),

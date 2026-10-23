@@ -5,13 +5,25 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/api/app.js';
 import { criarVerificadorDeToken } from '../src/api/authentication.js';
 import { UnauthorizedException } from '../src/application/errors.js';
+import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
+import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { Email } from '../src/domain/email.js';
 import { UserRole } from '../src/domain/enums.js';
 import { User } from '../src/domain/user.js';
-import { FakeContatos, FakeEnderecos, FakePedidoRepository, FakeQueries, FakeSupabase, FakeUsers, pedidoDeTeste } from './fakes.js';
+import {
+  FakeArmazenamento,
+  FakeAssistente,
+  FakeContatos,
+  FakeEnderecos,
+  FakePedidoRepository,
+  FakeQueries,
+  FakeSupabase,
+  FakeUsers,
+  pedidoDeTeste
+} from './fakes.js';
 
 const issuer = 'https://projeto-teste.supabase.co/auth/v1';
 const segredo = 'segredo-de-teste-com-tamanho-suficiente-para-hs256';
@@ -45,6 +57,8 @@ describe('API HTTP', () => {
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
+        fotoPedidoService: new FotoPedidoService(new FakeArmazenamento(), users),
+        assistentePedidoService: new AssistentePedidoService(new FakeAssistente()),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
       }
     });

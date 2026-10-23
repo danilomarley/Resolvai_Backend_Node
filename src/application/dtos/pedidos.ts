@@ -87,6 +87,7 @@ export const pedidoResumoResponseSchema = z.object({
   id: z.guid(),
   title: z.string(),
   category: z.string().optional(),
+  location: z.string().optional(),
   status: z.enum(statusPedidos),
   createdAt: dataIso,
   updatedAt: dataIso.optional(),

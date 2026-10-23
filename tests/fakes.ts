@@ -1,5 +1,9 @@
 import type {
   CurrentUser,
+  IArmazenamentoFotos,
+  IAssistentePedido,
+  MensagemChat,
+  RespostaAssistente,
   IContatoRepository,
   IEnderecoRepository,
   IPedidoQueries,
@@ -131,12 +135,52 @@ export class FakeEnderecos implements IEnderecoRepository {
   async add(endereco: Endereco) {
     this.itens.push(endereco);
   }
+  async getPrincipal(idUsuario: string) {
+    return this.itens.find(item => item.idUsuario === idUsuario) ?? null;
+  }
+  async salvarPrincipal(endereco: Endereco) {
+    const indice = this.itens.findIndex(item => item.idUsuario === endereco.idUsuario);
+    if (indice >= 0) this.itens[indice] = endereco;
+    else this.itens.push(endereco);
+  }
 }
 
 export class FakeContatos implements IContatoRepository {
   readonly itens: Contato[] = [];
   async add(contato: Contato) {
     this.itens.push(contato);
+  }
+  async getPrincipal(idUsuario: string) {
+    return this.itens.find(item => item.idUsuario === idUsuario) ?? null;
+  }
+  async salvarPrincipal(contato: Contato) {
+    const indice = this.itens.findIndex(item => item.idUsuario === contato.idUsuario);
+    if (indice >= 0) this.itens[indice] = contato;
+    else this.itens.push(contato);
+  }
+}
+
+export class FakeArmazenamento implements IArmazenamentoFotos {
+  readonly enviados: { caminho: string; tamanho: number; contentType: string }[] = [];
+  async enviar(caminho: string, conteudo: Buffer, contentType: string) {
+    this.enviados.push({ caminho, tamanho: conteudo.length, contentType });
+    return `https://projeto-teste.supabase.co/storage/v1/object/public/pedidos/${caminho}`;
+  }
+}
+
+export class FakeAssistente implements IAssistentePedido {
+  ultimaConversa: MensagemChat[] = [];
+  resposta: RespostaAssistente = {
+    resposta: 'Em qual bairro e cidade fica o imóvel?',
+    escopo: { categoria: 'Elétrica', descricao: 'Tomada da cozinha sem energia.' },
+    completo: false
+  };
+  erro?: Error;
+
+  async responder(mensagens: MensagemChat[]) {
+    if (this.erro) throw this.erro;
+    this.ultimaConversa = mensagens;
+    return this.resposta;
   }
 }
 
@@ -158,5 +202,11 @@ export class FakeSupabase implements ISupabaseAuthClient {
 
   async adminCreateUser(email: string) {
     return this.signUp(email);
+  }
+
+  readonly senhasAlteradas: { userId: string; password: string }[] = [];
+  async adminUpdatePassword(userId: string, password: string) {
+    if (this.erro) throw this.erro;
+    this.senhasAlteradas.push({ userId, password });
   }
 }

@@ -1,7 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
-import { ConflictException, NotFoundException, UnauthorizedException } from '../application/errors.js';
+import {
+  ConflictException,
+  MuitasTentativasException,
+  NotFoundException,
+  ServicoIndisponivelException,
+  UnauthorizedException
+} from '../application/errors.js';
 import { DomainException } from '../domain/errors.js';
 
 // Mesmos "type" e "title" padrão que o AddProblemDetails do ASP.NET Core usa (RFC 9110).
@@ -14,7 +20,9 @@ const tipos: Record<number, string> = {
   409: 'https://tools.ietf.org/html/rfc9110#section-15.5.10',
   413: 'https://tools.ietf.org/html/rfc9110#section-15.5.14',
   415: 'https://tools.ietf.org/html/rfc9110#section-15.5.16',
-  500: 'https://tools.ietf.org/html/rfc9110#section-15.6.1'
+  429: 'https://tools.ietf.org/html/rfc6585#section-4',
+  500: 'https://tools.ietf.org/html/rfc9110#section-15.6.1',
+  503: 'https://tools.ietf.org/html/rfc9110#section-15.6.4'
 };
 
 const titulos: Record<number, string> = {
@@ -26,7 +34,9 @@ const titulos: Record<number, string> = {
   409: 'Conflict',
   413: 'Payload Too Large',
   415: 'Unsupported Media Type',
-  500: 'An error occurred while processing your request.'
+  429: 'Too Many Requests',
+  500: 'An error occurred while processing your request.',
+  503: 'Service Unavailable'
 };
 
 export interface Problema {
@@ -151,5 +161,7 @@ function traduzir(error: Error): { status: number; title: string } | undefined {
   if (error instanceof NotFoundException) return { status: 404, title: 'Recurso não encontrado' };
   if (error instanceof ConflictException) return { status: 409, title: 'Conflito' };
   if (error instanceof DomainException) return { status: 400, title: 'Requisição inválida' };
+  if (error instanceof MuitasTentativasException) return { status: 429, title: 'Muitas tentativas' };
+  if (error instanceof ServicoIndisponivelException) return { status: 503, title: 'Serviço indisponível' };
   return undefined;
 }

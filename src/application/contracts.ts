@@ -31,10 +31,16 @@ export interface IUserRepository {
 
 export interface IEnderecoRepository {
   add(endereco: Endereco): Promise<void>;
+  getPrincipal(idUsuario: string): Promise<Endereco | null>;
+  /** Substitui os dados do endereço principal do usuário; cria se ainda não existir. */
+  salvarPrincipal(endereco: Endereco): Promise<void>;
 }
 
 export interface IContatoRepository {
   add(contato: Contato): Promise<void>;
+  getPrincipal(idUsuario: string): Promise<Contato | null>;
+  /** Substitui os dados do contato principal do usuário; cria se ainda não existir. */
+  salvarPrincipal(contato: Contato): Promise<void>;
 }
 
 // Consultas de leitura retornam projeções, sem carregar agregados desnecessários.
@@ -65,4 +71,40 @@ export interface ISupabaseAuthClient {
   signInWithPassword(email: string, password: string): Promise<SupabaseSession>;
   signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
   adminCreateUser(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
+  adminUpdatePassword(userId: string, password: string): Promise<void>;
+}
+
+/**
+ * Armazenamento das fotos dos pedidos (Supabase Storage). Devolve a URL pública do arquivo.
+ */
+export interface IArmazenamentoFotos {
+  enviar(caminho: string, conteudo: Buffer, contentType: string): Promise<string>;
+}
+
+export interface MensagemChat {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface EscopoSugerido {
+  titulo?: string;
+  categoria?: string;
+  descricao?: string;
+  localizacao?: string;
+  detalhes?: string;
+  urgencia?: string;
+  especificacoes?: string;
+}
+
+export interface RespostaAssistente {
+  resposta: string;
+  escopo: EscopoSugerido;
+  completo: boolean;
+}
+
+/**
+ * Assistente de IA que conversa com o cliente para montar o escopo do pedido (#69).
+ */
+export interface IAssistentePedido {
+  responder(mensagens: MensagemChat[]): Promise<RespostaAssistente>;
 }

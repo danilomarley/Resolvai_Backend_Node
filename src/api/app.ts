@@ -1,10 +1,13 @@
 import fastifyCors from '@fastify/cors';
+import fastifyMultipart from '@fastify/multipart';
 import fastifySwagger from '@fastify/swagger';
 import fastifySwaggerUi from '@fastify/swagger-ui';
 import Fastify, { type FastifyInstance, type FastifyServerOptions, LogController } from 'fastify';
 import { jsonSchemaTransform, serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { type CurrentUser, type IUserRepository, usuarioAnonimo } from '../application/contracts.js';
+import type { AssistentePedidoService } from '../application/services/assistente-pedido-service.js';
 import type { AuthService } from '../application/services/auth-service.js';
+import { type FotoPedidoService, tamanhoMaximoFoto } from '../application/services/foto-pedido-service.js';
 import type { PedidoService } from '../application/services/pedido-service.js';
 import type { UserService } from '../application/services/user-service.js';
 import { criarHookDeAutenticacao, type VerificarToken } from './authentication.js';
@@ -18,6 +21,8 @@ export interface Dependencias {
   authService: AuthService;
   userService: UserService;
   pedidoService: PedidoService;
+  fotoPedidoService: FotoPedidoService;
+  assistentePedidoService: AssistentePedidoService;
   /** Usado pela autenticação para aplicar papel e situação do perfil local. */
   userRepository: IUserRepository;
   verificarToken: VerificarToken;
@@ -81,6 +86,12 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
 
   app.get('/openapi/v1.json', { schema: { hide: true } }, async () => app.swagger());
 
+  // Usado pelo health check do Render: só confirma que o processo está de pé.
+  app.get('/health', { schema: { hide: true } }, async () => ({ status: 'ok' }));
+
+  // Uma foto por requisição, até 5 MB (POST /api/v1/orders/photos).
+  await app.register(fastifyMultipart, { limits: { fileSize: tamanhoMaximoFoto, files: 1, fields: 5, parts: 6 } });
+
   await app.register(authRoutes(dependencias.authService));
 
   // Protegido por padrão: tudo registrado aqui exige Bearer token válido.
@@ -91,7 +102,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
     protegido.addHook('onRequest', criarHookDeAutenticacao(dependencias.verificarToken, dependencias.userRepository));
 
     await protegido.register(usersRoutes(dependencias.userService));
-    await protegido.register(pedidosRoutes(dependencias.pedidoService));
+    await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
   });
 
