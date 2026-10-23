@@ -1,0 +1,90 @@
+@host = http://localhost:5172
+@orderId = 00000000-0000-0000-0000-000000000000
+
+### Auto-cadastro (público, sempre cria com papel Cliente)
+POST {{host}}/api/v1/auth/register
+Content-Type: application/json
+
+{
+  "name": "Maria Souza",
+  "email": "maria.souza@example.com",
+  "password": "SenhaForte123"
+}
+
+### Login: guarda o access_token na variável para as chamadas seguintes
+# @name login
+POST {{host}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "maria.souza@example.com",
+  "password": "SenhaForte123"
+}
+
+@token = {{login.response.body.accessToken}}
+
+### Usuário do token atual
+GET {{host}}/api/v1/users/me
+Authorization: Bearer {{token}}
+
+### Lista de usuários (somente Admin)
+GET {{host}}/api/v1/users
+Authorization: Bearer {{token}}
+
+### Criação administrativa (somente Admin)
+POST {{host}}/api/v1/users
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "João Prestador",
+  "email": "joao.prestador@example.com",
+  "password": "SenhaForte123",
+  "role": "Prestador"
+}
+
+### Ativar/desativar usuário (somente Admin)
+PATCH {{host}}/api/v1/users/00000000-0000-0000-0000-000000000000/status
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "isActive": false
+}
+
+### Cria um pedido (cliente com cadastro finalizado)
+POST {{host}}/api/v1/orders
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "titulo": "Infiltração na laje do quarto",
+  "categoria": "Impermeabilização",
+  "descricao": "A umidade aparece depois de chuvas.",
+  "localizacao": "Aldeota, Fortaleza",
+  "detalhes": "Mancha de 1 m² no canto do quarto",
+  "urgencia": "Nos próximos dias",
+  "especificacoes": "Inspeção, preparação da superfície e manta",
+  "fotos": [
+    { "url": "https://exemplo.supabase.co/storage/v1/object/public/pedidos/laje.jpg", "descricao": "Mancha" }
+  ]
+}
+
+### Seus Pedidos: lista paginada (status, page e pageSize são opcionais)
+GET {{host}}/api/v1/orders?page=1&pageSize=10
+Authorization: Bearer {{token}}
+
+### Seus Pedidos filtrados por status (Pending, InProgress, Completed, Cancelled)
+GET {{host}}/api/v1/orders?status=Pending
+Authorization: Bearer {{token}}
+
+### Detalhes de um pedido do usuário autenticado, com escopo, fotos e propostas (substitua orderId)
+GET {{host}}/api/v1/orders/{{orderId}}
+Authorization: Bearer {{token}}
+
+### Resumo da Home (dados dos cards e pedidos recentes)
+GET {{host}}/api/v1/home/summary
+Authorization: Bearer {{token}}
+
+### Documento OpenAPI de todas as rotas
+GET {{host}}/openapi/v1.json
