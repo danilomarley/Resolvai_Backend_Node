@@ -16,6 +16,8 @@ Antes do primeiro deploy, aplique no SQL Editor do Supabase os scripts de `db/sc
 - `011_create_ix_pedidos_cliente_criacao.sql` (índice da listagem de pedidos);
 - `012_create_bucket_pedidos.sql` (bucket das fotos; sem ele, `POST /api/v1/orders/photos` falha).
 
+Os scripts `013_create_fornecedores.sql`, `014_create_especialidades_fornecedor.sql` e `015_users_cpf_por_papel.sql` são referências do esquema profissional já existente no Supabase. Não reaplique esses scripts nesse banco. A API não executa migrações na inicialização. Em um banco novo e isolado, a suíte de integração demonstra a aplicação sequencial dos scripts, inclusive os papéis `anon` e `authenticated` usados nas revogações de acesso. Para produção, confira o inventário real antes de qualquer alteração autorizada.
+
 ## 2. API
 
 1. No Render, **New > Blueprint** e selecione o repositório `Resolvai_Backend_Node`. O Render lê o `render.yaml` e cria o serviço `resolvai-api`.

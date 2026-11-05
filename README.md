@@ -1,6 +1,6 @@
 # ResolvAI: API em Node.js
 
-API do ResolvAI migrada de [Resolvai_Backend](https://github.com/danilomarley/Resolvai_Backend) (C# / ASP.NET Core). Mantém as mesmas rotas, o mesmo contrato JSON e o mesmo banco no Supabase, então o front ([Resolvai_Cliente](https://github.com/danilomarley/Resolvai_Cliente)) funciona sem alterações.
+API do ResolvAI migrada de [Resolvai_Backend](https://github.com/danilomarley/Resolvai_Backend) (C# / ASP.NET Core), com Fastify/TypeScript e o mesmo banco no Supabase. Inclui cadastro e perfil profissional; a alteração de senha exige autenticação.
 
 **Stack:** Node.js 22.12+, TypeScript, [Fastify](https://fastify.dev), [zod](https://zod.dev) (validação e OpenAPI), [pg](https://node-postgres.com) (SQL escrito à mão, como o Dapper), [jose](https://github.com/panva/jose) (JWT do Supabase) e [Vitest](https://vitest.dev).
 
@@ -71,12 +71,18 @@ tests/                 Vitest
 | --- | --- | --- |
 | POST | `/api/v1/auth/login` | público |
 | POST | `/api/v1/auth/register` | público |
-| POST | `/api/v1/auth/check-email` | público (recuperação de senha, #70) |
-| POST | `/api/v1/auth/reset-password` | público (recuperação de senha, #70) |
+| POST | `/api/v1/auth/register-provider` | público, cadastro PF/PJ |
+| POST | `/api/v1/auth/login-provider` | público, exige Prestador ativo com perfil |
+| POST | `/api/v1/auth/refresh` | refresh token, revalida perfil local ativo |
+| POST | `/api/v1/auth/check-email` | público, resposta uniforme sem revelar existência da conta |
+| POST | `/api/v1/auth/reset-password` | Bearer, altera somente a senha do dono do token |
+| GET | `/api/v1/especialidades` | público, catálogo ativo |
+| GET | `/api/v1/fornecedores/me` | Prestador ativo, próprio perfil |
+| PATCH | `/api/v1/fornecedores/me` | Prestador ativo, próprio perfil |
 | GET | `/api/v1/users/me` | autenticado |
-| POST | `/api/v1/users/me/complete-registration` | autenticado |
+| POST | `/api/v1/users/me/complete-registration` | Cliente autenticado |
 | GET | `/api/v1/users/me/profile` | autenticado (#61) |
-| PATCH | `/api/v1/users/me/profile` | autenticado (#61) |
+| PATCH | `/api/v1/users/me/profile` | autenticado (#61); Prestador usa `/fornecedores/me` |
 | GET | `/api/v1/users` | Admin |
 | GET | `/api/v1/users/{id}` | Admin |
 | POST | `/api/v1/users` | Admin |
@@ -90,4 +96,6 @@ tests/                 Vitest
 
 Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md). Exemplos de requisição em [requests.http](requests.http). O que mudou em relação à API C# está em [docs/MIGRACAO.md](docs/MIGRACAO.md). O deploy no Render está em [docs/DEPLOY.md](docs/DEPLOY.md).
 
-A recuperação de senha segue o fluxo definido na #70: informa o e-mail e define a nova senha, sem confirmação por e-mail. Quem souber o e-mail de uma conta consegue trocar a senha dela; as rotas têm limite de tentativas por IP e por e-mail para reduzir abuso.
+`reset-password` recebe `{ "newPassword": "..." }` com Bearer verificado e altera somente a senha do sujeito do token. Um campo `email` legado é ignorado. `check-email` sempre devolve a mesma mensagem para e-mails válidos e não envia e-mail. A recuperação de acesso deve usar o fluxo verificado do Supabase Auth. Limites de tentativas são aplicados por IP e, no reset, por UUID.
+
+Contratos, retomada de cadastro, regras PF/PJ e referências SQL em [docs/PROVIDER-REGISTRATION.md](docs/PROVIDER-REGISTRATION.md). Os scripts `013` a `015` documentam tabelas e constraints já existentes no Supabase; não são executados na inicialização nem devem ser reaplicados no banco remoto.

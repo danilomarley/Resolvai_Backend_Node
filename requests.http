@@ -107,17 +107,37 @@ Content-Type: application/json
   ]
 }
 
-### Recuperação de senha, etapa 1
+### Resposta pública uniforme (não verifica existência nem envia e-mail)
 POST {{host}}/api/v1/auth/check-email
 Content-Type: application/json
 
 { "email": "maria.souza@example.com" }
 
-### Recuperação de senha, etapa 2
+### Alterar a própria senha com Bearer verificado
 POST {{host}}/api/v1/auth/reset-password
 Content-Type: application/json
+Authorization: Bearer {{token}}
 
-{ "email": "maria.souza@example.com", "newPassword": "NovaSenhaForte123" }
+{ "newPassword": "NovaSenhaForte123" }
+
+### Especialidades públicas
+GET {{host}}/api/v1/especialidades
+
+### Login profissional (Prestador ativo com perfil)
+POST {{host}}/api/v1/auth/login-provider
+Content-Type: application/json
+
+{ "email": "profissional@example.com", "password": "SenhaDeExemplo123" }
+
+### Renovação de sessão
+POST {{host}}/api/v1/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "substitua-pelo-refresh-token-da-sessao" }
+
+### Próprio perfil profissional
+GET {{host}}/api/v1/fornecedores/me
+Authorization: Bearer {{token}}
 
 ### Seus Pedidos: lista paginada (status, page e pageSize são opcionais)
 GET {{host}}/api/v1/orders?page=1&pageSize=10
