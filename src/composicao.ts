@@ -2,6 +2,9 @@ import type { Dependencias } from './api/app.js';
 import { criarVerificadorDeToken } from './api/authentication.js';
 import { AssistentePedidoService } from './application/services/assistente-pedido-service.js';
 import { AuthService } from './application/services/auth-service.js';
+import { FornecedorService } from './application/services/fornecedor-service.js';
+import { EspecialidadeQueries } from './infrastructure/repositories/especialidade-queries.js';
+import { FornecedorRepository } from './infrastructure/repositories/fornecedor-repository.js';
 import { FotoPedidoService } from './application/services/foto-pedido-service.js';
 import { PedidoService } from './application/services/pedido-service.js';
 import { UserService } from './application/services/user-service.js';
@@ -23,11 +26,15 @@ import { SupabaseStorage } from './infrastructure/storage/supabase-storage.js';
 export function criarDependencias(config: AppConfig, database: Database = createDatabase(config.database)): Dependencias & { database: Database } {
   const userRepository = new UserRepository(database);
   const supabaseAuthClient = new SupabaseAuthClient(config.supabase);
+  const fornecedores = new FornecedorRepository(database);
+  const especialidades = new EspecialidadeQueries(database);
 
   return {
     database,
     userRepository,
-    authService: new AuthService(userRepository, supabaseAuthClient),
+    authService: new AuthService(userRepository, supabaseAuthClient, fornecedores),
+    fornecedorService: new FornecedorService(userRepository, fornecedores, especialidades, supabaseAuthClient),
+    especialidadeQueries: especialidades,
     userService: new UserService(userRepository, new EnderecoRepository(database), new ContatoRepository(database), supabaseAuthClient),
     pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), userRepository),
     fotoPedidoService: new FotoPedidoService(

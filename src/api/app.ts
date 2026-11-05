@@ -7,6 +7,9 @@ import { jsonSchemaTransform, serializerCompiler, validatorCompiler } from 'fast
 import { type CurrentUser, type IUserRepository, usuarioAnonimo } from '../application/contracts.js';
 import type { AssistentePedidoService } from '../application/services/assistente-pedido-service.js';
 import type { AuthService } from '../application/services/auth-service.js';
+import type { IEspecialidadeQueries } from '../application/contracts.js';
+import type { FornecedorService } from '../application/services/fornecedor-service.js';
+import { fornecedoresPublicRoutes, fornecedoresRoutes } from './routes/fornecedores-routes.js';
 import { type FotoPedidoService, tamanhoMaximoFoto } from '../application/services/foto-pedido-service.js';
 import type { PedidoService } from '../application/services/pedido-service.js';
 import type { UserService } from '../application/services/user-service.js';
@@ -18,6 +21,8 @@ import { pedidosRoutes } from './routes/pedidos-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
 
 export interface Dependencias {
+  fornecedorService: FornecedorService;
+  especialidadeQueries: IEspecialidadeQueries;
   authService: AuthService;
   userService: UserService;
   pedidoService: PedidoService;
@@ -93,6 +98,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
   await app.register(fastifyMultipart, { limits: { fileSize: tamanhoMaximoFoto, files: 1, fields: 5, parts: 6 } });
 
   await app.register(authRoutes(dependencias.authService, dependencias.verificarToken, dependencias.userRepository));
+  await app.register(fornecedoresPublicRoutes(dependencias.fornecedorService, dependencias.especialidadeQueries));
 
   // Protegido por padrão: tudo registrado aqui exige Bearer token válido.
   await app.register(async protegido => {
@@ -102,6 +108,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
     protegido.addHook('onRequest', criarHookDeAutenticacao(dependencias.verificarToken, dependencias.userRepository));
 
     await protegido.register(usersRoutes(dependencias.userService));
+    await protegido.register(fornecedoresRoutes(dependencias.fornecedorService));
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
   });

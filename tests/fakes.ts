@@ -5,6 +5,8 @@ import type {
   MensagemChat,
   RespostaAssistente,
   IContatoRepository,
+  IEspecialidadeQueries,
+  IFornecedorRepository,
   IEnderecoRepository,
   IPedidoQueries,
   IPedidoRepository,
@@ -21,6 +23,8 @@ import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
 import type { StatusPedido, UserRole } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
+import type { Fornecedor } from '../src/domain/fornecedor.js';
+import type { FornecedorResponse } from '../src/application/dtos/fornecedores.js';
 
 export const usuario = (id?: string, extra: Partial<CurrentUser> = {}): CurrentUser => ({
   isAuthenticated: true,
@@ -195,6 +199,8 @@ export class FakeSupabase implements ISupabaseAuthClient {
     return this.session;
   }
 
+  async refreshSession() { return this.signInWithPassword(); }
+
   async signUp(email: string) {
     if (this.erro) throw this.erro;
     return this.novoUsuario ?? { id: crypto.randomUUID(), email };
@@ -208,5 +214,24 @@ export class FakeSupabase implements ISupabaseAuthClient {
   async adminUpdatePassword(userId: string, password: string) {
     if (this.erro) throw this.erro;
     this.senhasAlteradas.push({ userId, password });
+  }
+}
+
+export class FakeEspecialidades implements IEspecialidadeQueries {
+  async listActive() { return [{ codigo: 'eletrica', nome: 'Elétrica' }]; }
+}
+
+export class FakeFornecedores implements IFornecedorRepository {
+  readonly profiles = new Map<string, FornecedorResponse>();
+  async existsByCnpj(cnpj: string) { return [...this.profiles.values()].some(p => p.cnpj === cnpj); }
+  async getByUsuarioId(id: string) { return this.profiles.get(id) ?? null; }
+  async addComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
+    this.profiles.set(user.id, { ...fornecedor.dados, idUsuario: user.id, name: user.name, email: user.email.value,
+      cpf: user.cpf ?? undefined, tipoPessoa: fornecedor.tipoPessoa, cnpj: fornecedor.cnpj, telefone: contato.valor,
+      especialidades, bio: fornecedor.dados.bio ?? null, registroProfissional: fornecedor.dados.registroProfissional ?? null,
+      createdAt: new Date().toISOString(), updatedAt: null });
+  }
+  async updateComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
+    return this.addComplete(user, fornecedor, contato, especialidades);
   }
 }

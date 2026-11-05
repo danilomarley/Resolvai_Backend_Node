@@ -9,6 +9,8 @@ export const loginRequestSchema = z.object({
 
 export type LoginRequest = z.output<typeof loginRequestSchema>;
 
+export const refreshRequestSchema = z.object({ refreshToken: textoObrigatorio('RefreshToken', 4096) });
+
 /**
  * Auto-cadastro público. O papel é sempre Cliente; promoção só por um Admin.
  */

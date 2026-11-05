@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   loginRequestSchema,
   loginResponseSchema,
+  refreshRequestSchema,
   redefinirSenhaRequestSchema,
   registerRequestSchema,
   verificarEmailRequestSchema
@@ -25,7 +26,18 @@ export function authRoutes(authService: AuthService, verificarToken: VerificarTo
   const porUsuario = new LimitadorDeTentativas(5, 15 * 60 * 1000);
 
   return async (app: FastifyInstance) => {
+    app.addHook('preHandler', async (_request, reply) => { reply.header('Cache-Control', 'no-store'); });
     const rotas = app.withTypeProvider<ZodTypeProvider>();
+
+    rotas.post('/api/v1/auth/login-provider', {
+      schema: { tags: ['Auth'], summary: 'Autentica um Prestador ativo com perfil profissional.', body: loginRequestSchema, response: { 200: loginResponseSchema } },
+      handler: request => authService.loginProvider(request.body)
+    });
+
+    rotas.post('/api/v1/auth/refresh', {
+      schema: { tags: ['Auth'], summary: 'Renova a sessão e revalida o perfil local ativo.', body: refreshRequestSchema, response: { 200: loginResponseSchema } },
+      handler: request => authService.refresh(request.body.refreshToken)
+    });
 
     rotas.post('/api/v1/auth/login', {
       schema: {

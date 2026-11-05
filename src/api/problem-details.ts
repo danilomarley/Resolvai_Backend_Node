@@ -3,6 +3,7 @@ import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
 import {
   ConflictException,
+  ForbiddenException,
   MuitasTentativasException,
   NotFoundException,
   ServicoIndisponivelException,
@@ -158,6 +159,7 @@ export function registrarTratamentoDeErros(app: FastifyInstance): void {
 
 function traduzir(error: Error): { status: number; title: string } | undefined {
   if (error instanceof UnauthorizedException) return { status: 401, title: 'Não autorizado' };
+  if (error instanceof ForbiddenException) return { status: 403, title: 'Acesso negado' };
   if (error instanceof NotFoundException) return { status: 404, title: 'Recurso não encontrado' };
   if (error instanceof ConflictException) return { status: 409, title: 'Conflito' };
   if (error instanceof DomainException) return { status: 400, title: 'Requisição inválida' };

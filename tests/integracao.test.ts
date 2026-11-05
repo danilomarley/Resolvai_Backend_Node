@@ -14,6 +14,9 @@ import { criarVerificadorDeToken } from '../src/api/authentication.js';
 import { ServicoIndisponivelException } from '../src/application/errors.js';
 import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
+import { FornecedorService } from '../src/application/services/fornecedor-service.js';
+import { EspecialidadeQueries } from '../src/infrastructure/repositories/especialidade-queries.js';
+import { FornecedorRepository } from '../src/infrastructure/repositories/fornecedor-repository.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { UserService } from '../src/application/services/user-service.js';
@@ -76,6 +79,8 @@ describe('Integração com PostgreSQL', () => {
 
     // O Supabase já traz o schema storage; aqui basta o mínimo que o script 012 usa.
     await pglite.exec(`
+      create role anon;
+      create role authenticated;
       create schema if not exists storage;
       create table if not exists storage.buckets (
         id text primary key, name text not null, public boolean, file_size_limit bigint, allowed_mime_types text[]
@@ -128,11 +133,15 @@ describe('Integração com PostgreSQL', () => {
     });
 
     const users = new UserRepository(database);
+    const fornecedores = new FornecedorRepository(database);
+    const especialidades = new EspecialidadeQueries(database);
     app = await buildApp({
       logger: process.env.DEBUG_LOG ? { level: 'error' } : false,
       dependencias: {
         userRepository: users,
-        authService: new AuthService(users, supabase),
+        authService: new AuthService(users, supabase, fornecedores),
+        fornecedorService: new FornecedorService(users, fornecedores, especialidades, supabase),
+        especialidadeQueries: especialidades,
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
         fotoPedidoService: new FotoPedidoService(armazenamento, users),
@@ -188,6 +197,155 @@ describe('Integração com PostgreSQL', () => {
     const users = new UserRepository(database);
     expect(await users.existsByCpf('22222222222', ids.outroCliente, 'Cliente')).toBe(false);
     expect(await users.existsByCpf('22222222222', ids.outroCliente, 'Prestador')).toBe(true);
+  });
+
+  describe('fornecedores', () => {
+    const pf = { name: 'Profissional Teste', email: 'profissional@teste.com', password: 'SenhaForte123', tipoPessoa: 'PF',
+      nomeExibicao: 'Profissional', cpf: '529.982.247-25', telefone: '(85) 99999-1234', cidadeAtuacao: 'Fortaleza',
+      ufAtuacao: 'ce', raioAtendimentoKm: 20, bio: 'Serviços', registroProfissional: 'REG-1', especialidades: ['pintura', 'eletrica', 'pintura'] };
+    const pj = { ...pf, tipoPessoa: 'PJ', cpf: null, cnpj: '11.222.333/0001-81', email: 'empresa@teste.com' };
+    let profissionalId: string;
+    const cadastrar = (payload: object) => app.inject({ method: 'POST', url: '/api/v1/auth/register-provider', payload });
+
+    it('lista especialidades ativas publicamente', async () => {
+      const resposta = await app.inject({ method: 'GET', url: '/api/v1/especialidades' });
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toContainEqual({ codigo: 'eletrica', nome: 'Elétrica' });
+      await database.query("insert into especialidades(codigo,nome,is_active) values ('inativa','Inativa',false)");
+      expect((await app.inject({ method: 'GET', url: '/api/v1/especialidades' })).json().some((e: { codigo: string }) => e.codigo === 'inativa')).toBe(false);
+    });
+
+    it('cadastra PF, persiste todas as tabelas e agrega os dados no GET', async () => {
+      profissionalId = randomUUID();
+      supabase.novoUsuario = { id: profissionalId, email: pf.email };
+      const resposta = await cadastrar(pf);
+      expect(resposta.statusCode).toBe(201);
+      expect(resposta.headers['cache-control']).toBe('no-store');
+      expect(resposta.json()).toMatchObject({ idUsuario: profissionalId, name: pf.name, email: pf.email, cpf: '52998224725',
+        tipoPessoa: 'PF', telefone: '85999991234', ufAtuacao: 'CE', especialidades: ['eletrica', 'pintura'], bio: 'Serviços' });
+      const leitura = await chamar('GET', '/api/v1/fornecedores/me', profissionalId);
+      expect(leitura.statusCode).toBe(200);
+      expect(leitura.headers['cache-control']).toBe('no-store');
+      expect(leitura.json()).toEqual(resposta.json());
+      expect((await database.query('select * from contatos where id_usuario=$1 and principal=true', [profissionalId]))).toHaveLength(1);
+    });
+
+    it('recusa duplicidade de email, CPF Prestador e CNPJ; CPF Cliente pode repetir', async () => {
+      expect((await cadastrar(pf)).statusCode).toBe(409);
+      expect((await cadastrar({ ...pf, email: 'outra@teste.com' })).statusCode).toBe(409);
+      await database.query("insert into users (id,name,email,role,cpf) values ($1,'Cliente','cpfcliente@teste.com','Cliente','12345678909')", [randomUUID()]);
+      supabase.novoUsuario = { id: randomUUID(), email: 'mesmocpf@teste.com' };
+      expect((await cadastrar({ ...pf, email: 'mesmocpf@teste.com', cpf: '12345678909' })).statusCode).toBe(201);
+      supabase.novoUsuario = { id: randomUUID(), email: pj.email };
+      const empresa = await cadastrar(pj);
+      expect(empresa.statusCode).toBe(201);
+      expect(empresa.json()).not.toHaveProperty('cpf');
+      expect(empresa.json()).toMatchObject({ tipoPessoa: 'PJ', cnpj: '11222333000181' });
+      const finalizarComoCliente = await chamar('POST', '/api/v1/users/me/complete-registration', empresa.json().idUsuario, {
+        name: 'Empresa', cpf: '98765432100',
+        endereco: { logradouro: 'Rua Teste', numero: '1', bairro: 'Centro', cidade: 'Fortaleza', estado: 'CE', cep: '60000000' },
+        contato: { tipo: 'telefone', valor: '85999990000' }
+      });
+      expect(finalizarComoCliente.statusCode).toBe(403);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', empresa.json().idUsuario)).json()).not.toHaveProperty('cpf');
+      expect((await cadastrar({ ...pj, email: 'outraempresa@teste.com' })).statusCode).toBe(409);
+    });
+
+    it.each([
+      { cpf: '11111111111' }, { cpf: '52998224724' }, { cnpj: '11222333000181' }, { telefone: 'abc85999991234' },
+      { ufAtuacao: 'XX' }, { raioAtendimentoKm: 0 }, { raioAtendimentoKm: 201 }, { especialidades: [] },
+      { especialidades: ['nao_existe'] }, { especialidades: ['inativa'] }, { tipoPessoa: 'PJ', cnpj: '11222333000180', cpf: null },
+      { tipoPessoa: 'PJ', cnpj: '11222333000181', cpf: '52998224725' }
+    ])('valida os dados antes do signup: %j', async extra => {
+      expect((await cadastrar({ ...pf, email: 'invalido@teste.com', ...extra })).statusCode).toBe(400);
+    });
+
+    it('protege o perfil com 401, 403 e 404 sem autorizar por email', async () => {
+      expect((await app.inject({ method: 'GET', url: '/api/v1/fornecedores/me' })).statusCode).toBe(401);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', ids.cliente)).statusCode).toBe(403);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', ids.prestador)).statusCode).toBe(404);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', randomUUID(), undefined, pf.email)).statusCode).toBe(401);
+    });
+
+    it('PATCH persiste todos os editaveis e recusa alteracao de documentos/tipo/email', async () => {
+      const payload = { name: 'Novo Nome', nomeExibicao: 'Exibição Nova', telefone: '8533334444', cidadeAtuacao: 'Caucaia',
+        ufAtuacao: 'CE', raioAtendimentoKm: 45, bio: null, registroProfissional: null, especialidades: ['hidraulica'] };
+      const resposta = await chamar('PATCH', '/api/v1/fornecedores/me', profissionalId, payload);
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toMatchObject({ ...payload, cpf: '52998224725', email: pf.email, tipoPessoa: 'PF', updatedAt: expect.any(String) });
+      expect((await chamar('GET', '/api/v1/fornecedores/me', profissionalId)).json()).toEqual(resposta.json());
+      for (const proibido of [{ email: 'novo@teste.com' }, { cpf: '12345678909' }, { cnpj: '11222333000181' }, { tipoPessoa: 'PJ' }]) {
+        expect((await chamar('PATCH', '/api/v1/fornecedores/me', profissionalId, { ...payload, ...proibido })).statusCode).toBe(400);
+      }
+      const invalido = await chamar('PATCH', '/api/v1/fornecedores/me', profissionalId, { ...payload, name: 'Nao gravar', especialidades: ['inativa'] });
+      expect(invalido.statusCode).toBe(400);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', profissionalId)).json().name).toBe('Novo Nome');
+    });
+
+    it('Prestador nao contorna as regras de telefone pelo PATCH generico de Cliente', async () => {
+      const resposta = await chamar('PATCH', '/api/v1/users/me/profile', profissionalId, { contato: { tipo: 'whatsapp', valor: 'telefone invalido' } });
+      expect(resposta.statusCode).toBe(403);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', profissionalId)).json().telefone).toBe('8533334444');
+    });
+
+    it('rollback no cadastro deixa Auth intacto e permite retomar com o mesmo UUID', async () => {
+      const id = randomUUID();
+      supabase.novoUsuario = { id, email: 'retomada@teste.com' };
+      await database.query(`create function falha_contato_teste() returns trigger language plpgsql as $$ begin
+        if new.valor='85900000000' then raise exception 'falha local simulada'; end if; return new; end $$`);
+      await database.query('create trigger falha_contato_teste before insert on contatos for each row execute function falha_contato_teste()');
+      const payload = { ...pj, email: 'retomada@teste.com', cnpj: '12.ABC.345/01DE-35', telefone: '85900000000' };
+      const falha = await cadastrar(payload);
+      expect(falha.statusCode).toBe(503);
+      expect(await database.query('select * from users where id=$1', [id])).toHaveLength(0);
+      expect(await database.query('select * from fornecedores where id_usuario=$1', [id])).toHaveLength(0);
+      await database.query('drop trigger falha_contato_teste on contatos');
+      await database.query('drop function falha_contato_teste()');
+      expect((await cadastrar(payload)).statusCode).toBe(201);
+      expect(await database.query('select * from users where id=$1', [id])).toHaveLength(1);
+      supabase.novoUsuario = undefined;
+    });
+
+    it('falha tardia no PATCH desfaz nome, perfil, telefone e especialidades', async () => {
+      const anterior = (await chamar('GET', '/api/v1/fornecedores/me', profissionalId)).json();
+      await database.query(`create function falha_edicao_teste() returns trigger language plpgsql as $$ begin
+        if new.valor='85911111111' then raise exception 'falha local simulada'; end if; return new; end $$`);
+      await database.query('create trigger falha_edicao_teste before update on contatos for each row execute function falha_edicao_teste()');
+      try {
+        const resposta = await chamar('PATCH', '/api/v1/fornecedores/me', profissionalId, {
+          name: 'Nome que deve voltar', nomeExibicao: 'Exibição que deve voltar', telefone: '85911111111',
+          cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', raioAtendimentoKm: 50, especialidades: ['pintura']
+        });
+        expect(resposta.statusCode).toBe(500);
+        expect(resposta.json().detail).not.toContain('falha local simulada');
+        expect((await chamar('GET', '/api/v1/fornecedores/me', profissionalId)).json()).toEqual(anterior);
+      } finally {
+        await database.query('drop trigger falha_edicao_teste on contatos');
+        await database.query('drop function falha_edicao_teste()');
+      }
+    });
+
+    it('login-provider e refresh exigem identidade local ativa e perfil Prestador', async () => {
+      const session = (id: string) => ({ accessToken: 'access', tokenType: 'bearer', refreshToken: 'rotated', expiresAtUtc: new Date(), user: { id, email: pf.email } });
+      supabase.session = session(ids.cliente);
+      const login = () => app.inject({ method: 'POST', url: '/api/v1/auth/login-provider', payload: { email: pf.email, password: pf.password } });
+      expect((await login()).statusCode).toBe(403);
+      supabase.session = session(ids.prestador);
+      expect((await login()).statusCode).toBe(404);
+      supabase.session = session(profissionalId);
+      const logado = await login();
+      expect(logado.statusCode).toBe(200);
+      expect(logado.json().user).toMatchObject({ id: profissionalId, role: 'Prestador' });
+      const refresh = () => app.inject({ method: 'POST', url: '/api/v1/auth/refresh', payload: { refreshToken: 'refresh' } });
+      expect((await refresh()).json()).toMatchObject({ accessToken: 'access', refreshToken: 'rotated' });
+      supabase.session = session(randomUUID());
+      expect((await refresh()).statusCode).toBe(401);
+      await database.query('update users set is_active=false where id=$1', [profissionalId]);
+      supabase.session = session(profissionalId);
+      expect((await login()).statusCode).toBe(401);
+      expect((await refresh()).statusCode).toBe(401);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', profissionalId)).statusCode).toBe(401);
+    });
   });
 
   it('Home de outro cliente só conta os próprios pedidos', async () => {

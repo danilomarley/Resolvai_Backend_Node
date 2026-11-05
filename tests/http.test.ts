@@ -7,6 +7,7 @@ import { criarVerificadorDeToken } from '../src/api/authentication.js';
 import { UnauthorizedException } from '../src/application/errors.js';
 import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
+import { FornecedorService } from '../src/application/services/fornecedor-service.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { UserService } from '../src/application/services/user-service.js';
@@ -17,6 +18,8 @@ import {
   FakeArmazenamento,
   FakeAssistente,
   FakeContatos,
+  FakeEspecialidades,
+  FakeFornecedores,
   FakeEnderecos,
   FakePedidoRepository,
   FakeQueries,
@@ -51,10 +54,14 @@ describe('API HTTP', () => {
     users = new FakeUsers();
     queries = new FakeQueries();
     supabase = new FakeSupabase();
+    const fornecedores = new FakeFornecedores();
+    const especialidades = new FakeEspecialidades();
     app = await buildApp({
       dependencias: {
         userRepository: users,
-        authService: new AuthService(users, supabase),
+        authService: new AuthService(users, supabase, fornecedores),
+        fornecedorService: new FornecedorService(users, fornecedores, especialidades, supabase),
+        especialidadeQueries: especialidades,
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
         fotoPedidoService: new FotoPedidoService(new FakeArmazenamento(), users),

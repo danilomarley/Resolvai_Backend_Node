@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { ISupabaseAuthClient, SupabaseAuthUser, SupabaseSession } from '../../application/contracts.js';
-import { ConflictException, UnauthorizedException } from '../../application/errors.js';
+import { ConflictException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
 import { DomainException } from '../../domain/errors.js';
 
 export interface SupabaseAuthOptions {
@@ -11,6 +12,8 @@ export interface SupabaseAuthOptions {
 interface UserDto {
   id?: string;
   email?: string | null;
+  identities?: unknown[];
+  user_metadata?: { registration_attempt?: string };
 }
 
 interface TokenResponse {
@@ -46,11 +49,11 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     const response = await this.send('auth/v1/token?grant_type=password', this.options.anonKey, { email, password });
     const payload = await response.text();
 
-    if (response.status === 400 || response.status === 401) {
+    if ([400, 401, 403].includes(response.status)) {
       throw new UnauthorizedException();
     }
 
-    ensureSuccess(response, payload, 'Falha ao autenticar no Supabase.');
+    ensureSuccess(response, 'Falha ao autenticar no Supabase.');
 
     const body = deserialize<TokenResponse>(payload);
     if (!body) {
@@ -61,26 +64,53 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
   }
 
   async signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser> {
-    const response = await this.send('auth/v1/signup', this.options.anonKey, { email, password, data: { name } });
+    const attempt = randomUUID();
+    const response = await this.send('auth/v1/signup', this.options.anonKey, { email, password, data: { name, registration_attempt: attempt } });
     const payload = await response.text();
 
     if (isConflict(response, payload)) {
-      throw new ConflictException(`Já existe um usuário com o e-mail '${email}'.`);
+      return this.recoverUser(email, password);
     }
 
-    ensureSuccess(response, payload, 'Falha ao registrar no Supabase Auth.');
+    ensureSuccess(response, 'Falha ao registrar no Supabase Auth.');
 
     const body = deserialize<SignUpResponse>(payload);
     if (!body) {
       throw new DomainException('Resposta inválida do Supabase Auth no signup.');
     }
 
-    const user = body.user ?? (isGuid(body.id) ? { id: body.id, email: body.email } : null);
-    if (!user || !isGuid(user.id)) {
+    const user = body.user ?? (isGuid(body.id) ? body : null);
+    if (!user || !isGuid(user.id) || user.email?.toLowerCase() !== email.toLowerCase()) {
       throw new DomainException('Supabase Auth não devolveu o identificador do usuário.');
     }
 
-    return { id: user.id!.toLowerCase(), email: user.email ?? email };
+    // Supabase may deliberately return an obfuscated user for an existing address.
+    // The nonce only identifies this creation; it never grants a role.
+    if (user.identities?.length && user.user_metadata?.registration_attempt === attempt) {
+      return { id: user.id.toLowerCase(), email: user.email };
+    }
+    return this.recoverUser(email, password);
+  }
+
+  async refreshSession(refreshToken: string): Promise<SupabaseSession> {
+    const response = await this.send('auth/v1/token?grant_type=refresh_token', this.options.anonKey, { refresh_token: refreshToken });
+    const payload = await response.text();
+    if ([400, 401, 403, 422].includes(response.status)) throw new UnauthorizedException('Sessão expirada. Entre novamente.');
+    ensureSuccess(response, 'Falha ao renovar a sessão.');
+    const body = deserialize<TokenResponse>(payload);
+    if (!body) throw new UnauthorizedException();
+    return toSession(body);
+  }
+
+  private async recoverUser(email: string, password: string): Promise<SupabaseAuthUser> {
+    try {
+      const session = await this.signInWithPassword(email, password);
+      if (session.user.email.toLowerCase() !== email.toLowerCase()) throw new UnauthorizedException();
+      return session.user;
+    } catch (error) {
+      if (error instanceof UnauthorizedException) throw new ConflictException('Não foi possível retomar o cadastro. Confirme seu e-mail e tente novamente com as mesmas credenciais.');
+      throw error;
+    }
   }
 
   async adminCreateUser(email: string, password: string, name: string): Promise<SupabaseAuthUser> {
@@ -96,7 +126,7 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
       throw new ConflictException(`Já existe um usuário com o e-mail '${email}'.`);
     }
 
-    ensureSuccess(response, payload, 'Falha ao criar usuário no Supabase Auth.');
+    ensureSuccess(response, 'Falha ao criar usuário no Supabase Auth.');
 
     const body = deserialize<UserDto>(payload);
     if (!body) {
@@ -112,40 +142,45 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
 
   async adminUpdatePassword(userId: string, password: string): Promise<void> {
     const response = await this.send(`auth/v1/admin/users/${encodeURIComponent(userId)}`, this.options.serviceRoleKey, { password }, 'PUT');
-    const payload = await response.text();
-
+    await response.text();
     if (response.status === 422) {
       throw new DomainException('A nova senha não atende às regras de segurança do Supabase Auth.');
     }
 
-    ensureSuccess(response, payload, 'Falha ao redefinir a senha no Supabase Auth.');
+    ensureSuccess(response, 'Falha ao redefinir a senha no Supabase Auth.');
   }
 
-  private send(path: string, key: string, body: unknown, method = 'POST'): Promise<Response> {
-    return this.fetcher(new URL(path, this.baseUrl), {
-      method,
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
+  private async send(path: string, key: string, body: unknown, method = 'POST'): Promise<Response> {
+    try {
+      return await this.fetcher(new URL(path, this.baseUrl), {
+        method,
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch {
+      throw new ServicoIndisponivelException('Supabase Auth indisponível. Tente novamente.');
+    }
   }
 }
 
 function isConflict(response: Response, payload: string): boolean {
-  return response.status === 422 || (response.status === 400 && payload.toLowerCase().includes('already'));
+  const body = deserialize<{ error_code?: string; code?: string }>(payload);
+  return [400, 422].includes(response.status) && ['user_already_exists', 'email_exists'].includes(body?.error_code ?? body?.code ?? '');
 }
 
-function ensureSuccess(response: Response, payload: string, errorMessage: string): void {
+function ensureSuccess(response: Response, errorMessage: string): void {
   if (response.ok) {
     return;
   }
 
-  throw new DomainException(`${errorMessage} Status=${response.status}. Detalhe=${truncate(payload)}`);
+  if (response.status >= 500 || response.status === 429) throw new ServicoIndisponivelException(errorMessage);
+  throw new DomainException(`${errorMessage} Status=${response.status}.`);
 }
 
 function deserialize<T>(payload: string): T | null {
@@ -154,10 +189,6 @@ function deserialize<T>(payload: string): T | null {
   } catch {
     return null;
   }
-}
-
-function truncate(value: string): string {
-  return value.length <= 300 ? value : value.slice(0, 300);
 }
 
 function isGuid(value: string | undefined | null): value is string {

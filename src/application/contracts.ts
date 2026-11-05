@@ -3,6 +3,8 @@ import type { Email } from '../domain/email.js';
 import type { Endereco } from '../domain/endereco.js';
 import type { StatusPedido, UserRole } from '../domain/enums.js';
 import type { User } from '../domain/user.js';
+import type { Fornecedor } from '../domain/fornecedor.js';
+import type { EspecialidadeResponse, FornecedorResponse } from './dtos/fornecedores.js';
 import type { PaginaResponse } from './dtos/common.js';
 import type { ResumoHomeResponse } from './dtos/home.js';
 import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse } from './dtos/pedidos.js';
@@ -68,10 +70,22 @@ export interface SupabaseSession {
 }
 
 export interface ISupabaseAuthClient {
+  refreshSession(refreshToken: string): Promise<SupabaseSession>;
   signInWithPassword(email: string, password: string): Promise<SupabaseSession>;
   signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
   adminCreateUser(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
   adminUpdatePassword(userId: string, password: string): Promise<void>;
+}
+
+export interface IEspecialidadeQueries {
+  listActive(): Promise<EspecialidadeResponse[]>;
+}
+
+export interface IFornecedorRepository {
+  existsByCnpj(cnpj: string): Promise<boolean>;
+  getByUsuarioId(id: string): Promise<FornecedorResponse | null>;
+  addComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
+  updateComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
 }
 
 /**
