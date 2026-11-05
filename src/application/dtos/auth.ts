@@ -40,7 +40,6 @@ export const verificarEmailRequestSchema = z.object({
 export type VerificarEmailRequest = z.output<typeof verificarEmailRequestSchema>;
 
 export const redefinirSenhaRequestSchema = z.object({
-  email: obrigatorio('Email').pipe(emailAddress('Email')).pipe(textoObrigatorio('Email', 320)),
   newPassword: textoObrigatorio('NewPassword', 128, 8)
 });
 

@@ -12,16 +12,17 @@ import { userResponseSchema } from '../../application/dtos/users.js';
 import type { AuthService } from '../../application/services/auth-service.js';
 import { LimitadorDeTentativas } from '../limitador.js';
 import { urlAbsoluta } from './util.js';
+import { criarHookDeAutenticacao, type VerificarToken } from '../authentication.js';
+import type { IUserRepository } from '../../application/contracts.js';
 
 const mensagemDeLimite = 'Muitas tentativas de recuperação de senha. Aguarde 15 minutos e tente novamente.';
 
 /**
  * Rotas públicas (equivalente ao AuthController com [AllowAnonymous]).
  */
-export function authRoutes(authService: AuthService) {
-  // O fluxo da #70 troca a senha sem confirmação por e-mail; limitar tentativas reduz abuso e varredura de e-mails.
+export function authRoutes(authService: AuthService, verificarToken: VerificarToken, users: IUserRepository) {
   const porIp = new LimitadorDeTentativas(10, 15 * 60 * 1000);
-  const porEmail = new LimitadorDeTentativas(5, 15 * 60 * 1000);
+  const porUsuario = new LimitadorDeTentativas(5, 15 * 60 * 1000);
 
   return async (app: FastifyInstance) => {
     const rotas = app.withTypeProvider<ZodTypeProvider>();
@@ -52,30 +53,31 @@ export function authRoutes(authService: AuthService) {
     rotas.post('/api/v1/auth/check-email', {
       schema: {
         tags: ['Auth'],
-        summary: 'Recuperação de senha, etapa 1: confirma que o e-mail tem conta (#70).',
-        description: 'Responde 200 quando existe conta ativa para o e-mail e 404 quando não existe.',
+        summary: 'Resposta uniforme sem divulgar a existência de uma conta.',
         body: verificarEmailRequestSchema,
-        response: { 200: z.object({ email: z.string() }) }
+        response: { 200: z.object({ message: z.string() }) }
       },
       handler: async request => {
         porIp.registrar(`check:${request.ip}`, mensagemDeLimite);
         await authService.verificarEmail(request.body);
-        return { email: request.body.email.trim().toLowerCase() };
+        return { message: 'Se houver uma conta, use o fluxo de recuperação do Supabase Auth.' };
       }
     });
 
     rotas.post('/api/v1/auth/reset-password', {
+      onRequest: criarHookDeAutenticacao(verificarToken, users),
       schema: {
+        security: [{ Bearer: [] }],
         tags: ['Auth'],
-        summary: 'Recuperação de senha, etapa 2: define a nova senha (#70).',
+        summary: 'Altera a senha do sujeito do Bearer verificado.',
         description: 'A nova senha precisa ter de 8 a 128 caracteres.',
         body: redefinirSenhaRequestSchema,
         response: { 200: z.object({ message: z.string() }) }
       },
       handler: async request => {
         porIp.registrar(`reset:${request.ip}`, mensagemDeLimite);
-        porEmail.registrar(`reset:${request.body.email.trim().toLowerCase()}`, mensagemDeLimite);
-        await authService.redefinirSenha(request.body);
+        porUsuario.registrar(`reset:${request.usuario.id}`, mensagemDeLimite);
+        await authService.redefinirSenha(request.body, request.usuario);
         return { message: 'Senha redefinida.' };
       }
     });

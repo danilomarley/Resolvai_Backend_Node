@@ -23,7 +23,7 @@ export interface IUserRepository {
   getById(id: string): Promise<User | null>;
   getByEmail(email: Email): Promise<User | null>;
   existsByEmail(email: Email): Promise<boolean>;
-  existsByCpf(cpf: string, excludingUserId: string): Promise<boolean>;
+  existsByCpf(cpf: string, excludingUserId: string, role: UserRole): Promise<boolean>;
   getAll(): Promise<User[]>;
   add(user: User): Promise<void>;
   update(user: User): Promise<void>;

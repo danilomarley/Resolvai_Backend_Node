@@ -92,7 +92,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
   // Uma foto por requisição, até 5 MB (POST /api/v1/orders/photos).
   await app.register(fastifyMultipart, { limits: { fileSize: tamanhoMaximoFoto, files: 1, fields: 5, parts: 6 } });
 
-  await app.register(authRoutes(dependencias.authService));
+  await app.register(authRoutes(dependencias.authService, dependencias.verificarToken, dependencias.userRepository));
 
   // Protegido por padrão: tudo registrado aqui exige Bearer token válido.
   await app.register(async protegido => {

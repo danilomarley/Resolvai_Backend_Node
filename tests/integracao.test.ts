@@ -184,6 +184,12 @@ describe('Integração com PostgreSQL', () => {
     expect(quarto).toMatchObject({ title: 'Pedido', status: 'Cancelled' });
   });
 
+  it('CPF pode repetir entre papeis e permanece unico dentro do mesmo papel', async () => {
+    const users = new UserRepository(database);
+    expect(await users.existsByCpf('22222222222', ids.outroCliente, 'Cliente')).toBe(false);
+    expect(await users.existsByCpf('22222222222', ids.outroCliente, 'Prestador')).toBe(true);
+  });
+
   it('Home de outro cliente só conta os próprios pedidos', async () => {
     const corpo = (await chamar('GET', '/api/v1/home/summary', ids.outroCliente)).json();
     expect(corpo.orders.total).toBe(1);
@@ -383,16 +389,17 @@ describe('Integração com PostgreSQL', () => {
   });
 
   describe('recuperação de senha (#70)', () => {
-    const post = (url: string, payload: unknown, ip = '10.0.0.1') =>
-      app.inject({ method: 'POST', url, payload: payload as object, remoteAddress: ip });
+    const post = async (url: string, payload: unknown, ip = '10.0.0.1', sub = ids.cliente) =>
+      app.inject({ method: 'POST', url, payload: payload as object, remoteAddress: ip,
+        headers: { authorization: `Bearer ${await token(sub)}` } });
 
-    it('confirma e-mail existente e recusa inexistente', async () => {
+    it('nao divulga se o email existe', async () => {
       const existe = await post('/api/v1/auth/check-email', { email: 'MARIA@teste.com' });
       expect(existe.statusCode).toBe(200);
-      expect(existe.json()).toEqual({ email: 'maria@teste.com' });
 
       const naoExiste = await post('/api/v1/auth/check-email', { email: 'ninguem@teste.com' });
-      expect(naoExiste.statusCode).toBe(404);
+      expect(naoExiste.statusCode).toBe(200);
+      expect(naoExiste.json()).toEqual(existe.json());
     });
 
     it('troca a senha no Supabase Auth do usuário certo e exige 8 caracteres', async () => {
@@ -404,10 +411,10 @@ describe('Integração com PostgreSQL', () => {
       expect(supabase.senhasAlteradas.at(-1)).toEqual({ userId: ids.cliente, password: 'NovaSenha123' });
     });
 
-    it('limita tentativas por e-mail', async () => {
+    it('limita tentativas pelo sujeito verificado entre IPs diferentes', async () => {
       const ultimas = [];
       for (let i = 0; i < 6; i++) {
-        ultimas.push(await post('/api/v1/auth/reset-password', { email: 'pedro@teste.com', newPassword: 'SenhaNova123' }, `10.0.1.${i}`));
+        ultimas.push(await post('/api/v1/auth/reset-password', { email: 'pedro@teste.com', newPassword: 'SenhaNova123' }, `10.0.1.${i}`, ids.prestador));
       }
       expect(ultimas.slice(0, 5).every(r => r.statusCode === 200)).toBe(true);
       expect(ultimas[5]!.statusCode).toBe(429);

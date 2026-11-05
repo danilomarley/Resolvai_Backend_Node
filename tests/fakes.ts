@@ -19,7 +19,7 @@ import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse } from
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
-import type { StatusPedido } from '../src/domain/enums.js';
+import type { StatusPedido, UserRole } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
 
 export const usuario = (id?: string, extra: Partial<CurrentUser> = {}): CurrentUser => ({
@@ -112,8 +112,8 @@ export class FakeUsers implements IUserRepository {
     return (await this.getByEmail(email)) !== null;
   }
 
-  async existsByCpf(cpf: string, excludingUserId: string) {
-    return [...this.users.values()].some(user => user.cpf === cpf && user.id !== excludingUserId);
+  async existsByCpf(cpf: string, excludingUserId: string, role: UserRole) {
+    return [...this.users.values()].some(user => user.cpf === cpf && user.id !== excludingUserId && user.role === role);
   }
 
   async getAll() {

@@ -80,6 +80,36 @@ describe('API HTTP', () => {
     app.inject({ method: 'GET', url, headers: sub ? { authorization: `Bearer ${await token(sub)}` } : {} });
 
   describe('autenticação', () => {
+    it('recusa login com UUID diferente mesmo quando o email coincide', async () => {
+      supabase.session = { accessToken: 'token', tokenType: 'bearer', expiresAtUtc: new Date(), refreshToken: null,
+        user: { id: randomUUID(), email: 'maria@teste.com' } };
+      const resposta = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { email: 'maria@teste.com', password: 'senha' } });
+      expect(resposta.statusCode).toBe(401);
+    });
+
+    it('claims de papel sem perfil local nao concedem administracao', async () => {
+      const jwt = await new SignJWT({ role: 'Admin', email: 'sem-perfil@teste.com' })
+        .setProtectedHeader({ alg: 'HS256' }).setSubject(randomUUID()).setIssuer(issuer)
+        .setAudience('authenticated').setExpirationTime('5m').sign(new TextEncoder().encode(segredo));
+      expect((await app.inject({ method: 'GET', url: '/api/v1/users', headers: { authorization: `Bearer ${jwt}` } })).statusCode).toBe(403);
+    });
+
+    it('reset exige Bearer e so altera o sujeito verificado', async () => {
+      const payload = { email: 'admin@teste.com', newPassword: 'SenhaNova123' };
+      expect((await app.inject({ method: 'POST', url: '/api/v1/auth/reset-password', payload })).statusCode).toBe(401);
+      const resposta = await app.inject({ method: 'POST', url: '/api/v1/auth/reset-password', payload,
+        headers: { authorization: `Bearer ${await token(clienteId)}` } });
+      expect(resposta.statusCode).toBe(200);
+      expect(supabase.senhasAlteradas.at(-1)?.userId).toBe(clienteId);
+    });
+
+    it('check-email retorna a mesma resposta para conta existente e ausente', async () => {
+      const chamar = (email: string) => app.inject({ method: 'POST', url: '/api/v1/auth/check-email', payload: { email } });
+      const existente = await chamar('maria@teste.com');
+      const ausente = await chamar('ausente@teste.com');
+      expect(ausente.statusCode).toBe(200);
+      expect(ausente.json()).toEqual(existente.json());
+    });
     it('sem token responde 401 em ProblemDetails com WWW-Authenticate', async () => {
       const resposta = await get('/api/v1/home/summary');
       expect(resposta.statusCode).toBe(401);

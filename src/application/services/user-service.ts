@@ -107,7 +107,7 @@ export class UserService {
 
     const cpf = onlyDigits(request.cpf);
 
-    if (await this.userRepository.existsByCpf(cpf, id)) {
+    if (await this.userRepository.existsByCpf(cpf, id, user.role)) {
       throw new ConflictException(`Já existe um usuário com o CPF '${request.cpf}'.`);
     }
 
