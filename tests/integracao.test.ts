@@ -205,7 +205,8 @@ describe('Integração com PostgreSQL', () => {
       ufAtuacao: 'ce', raioAtendimentoKm: 20, bio: 'Serviços', registroProfissional: 'REG-1', especialidades: ['pintura', 'eletrica', 'pintura'] };
     const pj = { ...pf, tipoPessoa: 'PJ', cpf: null, cnpj: '11.222.333/0001-81', email: 'empresa@teste.com' };
     let profissionalId: string;
-    const cadastrar = (payload: object) => app.inject({ method: 'POST', url: '/api/v1/auth/register-provider', payload });
+    let cadastroIp = 0;
+    const cadastrar = (payload: object) => app.inject({ method: 'POST', url: '/api/v1/auth/register-provider', payload, remoteAddress: `192.0.2.${++cadastroIp}` });
 
     it('lista especialidades ativas publicamente', async () => {
       const resposta = await app.inject({ method: 'GET', url: '/api/v1/especialidades' });

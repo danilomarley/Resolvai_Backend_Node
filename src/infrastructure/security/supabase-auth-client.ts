@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import type { ISupabaseAuthClient, SupabaseAuthUser, SupabaseSession } from '../../application/contracts.js';
-import { ConflictException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
+import { ConflictException, ForbiddenException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
 import { DomainException } from '../../domain/errors.js';
 
 export interface SupabaseAuthOptions {
@@ -12,8 +11,6 @@ export interface SupabaseAuthOptions {
 interface UserDto {
   id?: string;
   email?: string | null;
-  identities?: unknown[];
-  user_metadata?: { registration_attempt?: string };
 }
 
 interface TokenResponse {
@@ -25,15 +22,17 @@ interface TokenResponse {
   user?: UserDto | null;
 }
 
-interface SignUpResponse extends UserDto {
-  user?: UserDto | null;
+interface RegistrationSettings {
+  disable_signup: boolean;
+  external: { email: boolean };
+  mailer_autoconfirm: boolean;
 }
 
 const guidVazio = '00000000-0000-0000-0000-000000000000';
 const timeoutMs = 100_000; // Mesmo timeout padrão do HttpClient da API C#.
 
 /**
- * Chamadas HTTP ao GoTrue (Supabase Auth): login, signup público e criação administrativa.
+ * GoTrue: login, cadastro create-if-new limitado à política do projeto e provisionamento Admin.
  */
 export class SupabaseAuthClient implements ISupabaseAuthClient {
   private readonly baseUrl: string;
@@ -64,32 +63,53 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
   }
 
   async signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser> {
-    const attempt = randomUUID();
-    const response = await this.send('auth/v1/signup', this.options.anonKey, { email, password, data: { name, registration_attempt: attempt } });
-    const payload = await response.text();
-
-    if (isConflict(response, payload)) {
-      return this.recoverUser(email, password);
+    const settings = await this.registrationSettings();
+    let response: Response;
+    let payload: string;
+    try {
+      // Public /signup can replace the password of an existing unconfirmed user.
+      // POST admin/users only creates new users; never update/delete an existing account.
+      response = await this.send('auth/v1/admin/users', this.options.serviceRoleKey, {
+        email, password, email_confirm: settings.mailer_autoconfirm, user_metadata: { name }
+      });
+      payload = await response.text();
+    } catch {
+      return this.recoverUser(email, password, true);
     }
-
+    if (isConflict(response, payload)) return this.recoverUser(email, password);
+    if (response.status >= 500) return this.recoverUser(email, password, true);
     ensureSuccess(response, 'Falha ao registrar no Supabase Auth.');
-
-    const body = deserialize<SignUpResponse>(payload);
-    if (!body) {
-      throw new DomainException('Resposta inválida do Supabase Auth no signup.');
-    }
-
-    const user = body.user ?? (isGuid(body.id) ? body : null);
+    const user = deserialize<UserDto>(payload);
     if (!user || !isGuid(user.id) || user.email?.toLowerCase() !== email.toLowerCase()) {
-      throw new DomainException('Supabase Auth não devolveu o identificador do usuário.');
+      return this.recoverUser(email, password, true);
     }
+    // Admin creation sends no email. Preserve the project's existing confirmation policy.
+    if (!settings.mailer_autoconfirm) await this.resendConfirmation(email);
+    return { id: user.id.toLowerCase(), email: user.email };
+  }
 
-    // Supabase may deliberately return an obfuscated user for an existing address.
-    // The nonce only identifies this creation; it never grants a role.
-    if (user.identities?.length && user.user_metadata?.registration_attempt === attempt) {
-      return { id: user.id.toLowerCase(), email: user.email };
+  private async registrationSettings(): Promise<RegistrationSettings> {
+    let settings: RegistrationSettings | null;
+    try {
+      const response = await this.send('auth/v1/settings', this.options.anonKey, undefined, 'GET');
+      if (!response.ok) throw new Error('Settings unavailable');
+      settings = deserialize<RegistrationSettings>(await response.text());
+      if (!settings || typeof settings.disable_signup !== 'boolean' || typeof settings.external?.email !== 'boolean'
+        || typeof settings.mailer_autoconfirm !== 'boolean') throw new Error('Invalid registration settings');
+    } catch {
+      throw new ServicoIndisponivelException('Não foi possível confirmar a política de cadastro do Supabase Auth. Tente novamente.');
     }
-    return this.recoverUser(email, password);
+    if (settings.disable_signup || !settings.external.email) throw new ForbiddenException('O cadastro por e-mail está desabilitado neste projeto.');
+    return settings;
+  }
+
+  private async resendConfirmation(email: string): Promise<void> {
+    try {
+      const response = await this.send('auth/v1/resend', this.options.anonKey, { type: 'signup', email });
+      await response.text();
+      if (response.ok) return;
+    } catch { /* Keep confirmation delivery failure visible without exposing transport details. */ }
+    throw new ServicoIndisponivelException('Não foi possível enviar a confirmação de e-mail. Tente novamente com as credenciais originais.');
   }
 
   async refreshSession(refreshToken: string): Promise<SupabaseSession> {
@@ -102,13 +122,17 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     return toSession(body);
   }
 
-  private async recoverUser(email: string, password: string): Promise<SupabaseAuthUser> {
+  private async recoverUser(email: string, password: string, unknownCreation = false): Promise<SupabaseAuthUser> {
     try {
       const session = await this.signInWithPassword(email, password);
       if (session.user.email.toLowerCase() !== email.toLowerCase()) throw new UnauthorizedException();
       return session.user;
     } catch (error) {
-      if (error instanceof UnauthorizedException) throw new ConflictException('Não foi possível retomar o cadastro. Confirme seu e-mail e tente novamente com as mesmas credenciais.');
+      if (error instanceof UnauthorizedException) {
+        await this.resendConfirmation(email);
+        if (unknownCreation) throw new ServicoIndisponivelException('Resultado do cadastro não confirmado. Confirme seu e-mail e tente novamente com as credenciais originais.');
+        throw new ConflictException('Não foi possível retomar o cadastro. Confirme seu e-mail e tente novamente com as mesmas credenciais.');
+      }
       throw error;
     }
   }
@@ -160,7 +184,7 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
           Accept: 'application/json',
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(body),
+        body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs)
       });
     } catch {

@@ -24,6 +24,7 @@ const mensagemDeLimite = 'Muitas tentativas de recuperação de senha. Aguarde 1
 export function authRoutes(authService: AuthService, verificarToken: VerificarToken, users: IUserRepository) {
   const porIp = new LimitadorDeTentativas(10, 15 * 60 * 1000);
   const porUsuario = new LimitadorDeTentativas(5, 15 * 60 * 1000);
+  const cadastrosPorIp = new LimitadorDeTentativas(10, 15 * 60 * 1000);
 
   return async (app: FastifyInstance) => {
     app.addHook('preHandler', async (_request, reply) => { reply.header('Cache-Control', 'no-store'); });
@@ -50,9 +51,10 @@ export function authRoutes(authService: AuthService, verificarToken: VerificarTo
     });
 
     rotas.post('/api/v1/auth/register', {
+      onRequest: async request => { cadastrosPorIp.registrar(request.ip, 'Muitas tentativas de cadastro. Aguarde 15 minutos e tente novamente.'); },
       schema: {
         tags: ['Auth'],
-        summary: 'Auto-cadastro público no Supabase Auth. O perfil local sempre nasce com o papel Cliente.',
+        summary: 'Auto-cadastro conforme a política do Supabase Auth. O perfil local sempre nasce com o papel Cliente.',
         body: registerRequestSchema,
         response: { 201: userResponseSchema }
       },

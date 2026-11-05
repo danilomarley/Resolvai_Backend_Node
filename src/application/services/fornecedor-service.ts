@@ -35,7 +35,7 @@ export class FornecedorService {
     try {
       identidade = await this.auth.signUp(email.value, request.password, request.name.trim());
     } catch (error) {
-      if (error instanceof ConflictException || error instanceof DomainException || error instanceof UnauthorizedException) throw error;
+      if (error instanceof ConflictException || error instanceof DomainException || error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error;
       throw pendente();
     }
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identidade.id)

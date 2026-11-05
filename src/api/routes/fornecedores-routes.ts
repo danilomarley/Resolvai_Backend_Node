@@ -4,8 +4,10 @@ import { z } from 'zod';
 import type { IEspecialidadeQueries } from '../../application/contracts.js';
 import { atualizarFornecedorRequestSchema, especialidadeResponseSchema, fornecedorResponseSchema, registerFornecedorRequestSchema } from '../../application/dtos/fornecedores.js';
 import type { FornecedorService } from '../../application/services/fornecedor-service.js';
+import { LimitadorDeTentativas } from '../limitador.js';
 
 export function fornecedoresPublicRoutes(service: FornecedorService, especialidades: IEspecialidadeQueries) {
+  const cadastrosPorIp = new LimitadorDeTentativas(10, 15 * 60 * 1000);
   return async (app: FastifyInstance) => {
     const rotas = app.withTypeProvider<ZodTypeProvider>();
     rotas.get('/api/v1/especialidades', {
@@ -13,6 +15,7 @@ export function fornecedoresPublicRoutes(service: FornecedorService, especialida
       handler: () => especialidades.listActive()
     });
     rotas.post('/api/v1/auth/register-provider', {
+      onRequest: async request => { cadastrosPorIp.registrar(request.ip, 'Muitas tentativas de cadastro. Aguarde 15 minutos e tente novamente.'); },
       schema: { tags: ['Auth'], summary: 'Cadastra Prestador PF/PJ com perfil e especialidades.', body: registerFornecedorRequestSchema, response: { 201: fornecedorResponseSchema } },
       handler: async (request, reply) => reply.code(201).header('Cache-Control', 'no-store').header('Location', '/api/v1/fornecedores/me').send(await service.register(request.body))
     });

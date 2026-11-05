@@ -99,3 +99,5 @@ Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md
 `reset-password` recebe `{ "newPassword": "..." }` com Bearer verificado e altera somente a senha do sujeito do token. Um campo `email` legado é ignorado. `check-email` sempre devolve a mesma mensagem para e-mails válidos e não envia e-mail. A recuperação de acesso deve usar o fluxo verificado do Supabase Auth. Limites de tentativas são aplicados por IP e, no reset, por UUID.
 
 Contratos, retomada de cadastro, regras PF/PJ e referências SQL em [docs/PROVIDER-REGISTRATION.md](docs/PROVIDER-REGISTRATION.md). Os scripts `013` a `015` documentam tabelas e constraints já existentes no Supabase; não são executados na inicialização nem devem ser reaplicados no banco remoto.
+
+Cadastros públicos consultam a política atual do Auth e usam criação `create-if-new` no servidor. Contas pendentes existentes preservam sua senha e exigem confirmação antes da retomada. O envio de confirmação é separado da criação. As duas rotas de cadastro têm limite de 10 tentativas/IP a cada 15 minutos por rota/instância; nenhum campo administrativo é encaminhado do cliente.

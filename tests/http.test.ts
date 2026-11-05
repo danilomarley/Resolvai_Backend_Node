@@ -87,6 +87,12 @@ describe('API HTTP', () => {
     app.inject({ method: 'GET', url, headers: sub ? { authorization: `Bearer ${await token(sub)}` } : {} });
 
   describe('autenticação', () => {
+    it.each(['/api/v1/auth/register-provider', '/api/v1/auth/register'])('limita cadastro por IP antes da criacao privilegiada: %s', async url => {
+      const respostas = [];
+      for (let i = 0; i < 11; i++) respostas.push(await app.inject({ method: 'POST', url, payload: {}, remoteAddress: '203.0.113.20' }));
+      expect(respostas.slice(0, 10).every(resposta => resposta.statusCode === 400)).toBe(true);
+      expect(respostas[10]?.statusCode).toBe(429);
+    });
     it('recusa login com UUID diferente mesmo quando o email coincide', async () => {
       supabase.session = { accessToken: 'token', tokenType: 'bearer', expiresAtUtc: new Date(), refreshToken: null,
         user: { id: randomUUID(), email: 'maria@teste.com' } };
