@@ -11,6 +11,7 @@ import { FotoPedidoService } from '../src/application/services/foto-pedido-servi
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { Email } from '../src/domain/email.js';
+import { PrestadorPublicoService } from '../src/application/services/prestador-publico-service.js';
 import { UserRole } from '../src/domain/enums.js';
 import { User } from '../src/domain/user.js';
 import {
@@ -58,6 +59,7 @@ describe('API HTTP', () => {
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
         fotoPedidoService: new FotoPedidoService(new FakeArmazenamento(), users),
+        prestadorPublicoService: new PrestadorPublicoService({ async getById() { return null; } }),
         assistentePedidoService: new AssistentePedidoService(new FakeAssistente()),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
       }

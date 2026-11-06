@@ -5,6 +5,8 @@ import { AuthService } from './application/services/auth-service.js';
 import { FotoPedidoService } from './application/services/foto-pedido-service.js';
 import { PedidoService } from './application/services/pedido-service.js';
 import { UserService } from './application/services/user-service.js';
+import { PrestadorPublicoService } from './application/services/prestador-publico-service.js';
+import { PrestadorPublicoQueries } from './infrastructure/repositories/prestador-publico-queries.js';
 import type { AppConfig } from './config/env.js';
 import { createDatabase, type Database } from './infrastructure/database.js';
 import { ClaudeAssistentePedido } from './infrastructure/ia/claude-assistente-pedido.js';
@@ -35,6 +37,7 @@ export function criarDependencias(config: AppConfig, database: Database = create
       userRepository
     ),
     assistentePedidoService: new AssistentePedidoService(new ClaudeAssistentePedido(config.claude)),
+    prestadorPublicoService: new PrestadorPublicoService(new PrestadorPublicoQueries(database)),
     verificarToken: criarVerificadorDeToken(config.supabase)
   };
 }

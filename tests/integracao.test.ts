@@ -24,6 +24,8 @@ import { PedidoQueries } from '../src/infrastructure/repositories/pedido-queries
 import { PedidoRepository } from '../src/infrastructure/repositories/pedido-repository.js';
 import { UserRepository } from '../src/infrastructure/repositories/user-repository.js';
 import { FakeArmazenamento, FakeAssistente, FakeSupabase } from './fakes.js';
+import { PrestadorPublicoService } from '../src/application/services/prestador-publico-service.js';
+import { PrestadorPublicoQueries } from '../src/infrastructure/repositories/prestador-publico-queries.js';
 
 // PostgreSQL real (PGlite, em memória) com os mesmos scripts de db/scripts, acessado pelo driver pg da API.
 const issuer = 'https://projeto-teste.supabase.co/auth/v1';
@@ -136,6 +138,7 @@ describe('Integração com PostgreSQL', () => {
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
         fotoPedidoService: new FotoPedidoService(armazenamento, users),
+        prestadorPublicoService: new PrestadorPublicoService(new PrestadorPublicoQueries(database)),
         assistentePedidoService: new AssistentePedidoService(assistente),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
       }
@@ -494,6 +497,60 @@ describe('Integração com PostgreSQL', () => {
       assistente.erro = undefined;
       expect(resposta.statusCode).toBe(503);
       expect(resposta.json().detail).toBe('O assistente de pedidos não está configurado neste servidor.');
+    });
+  });
+
+  describe('perfil público (#93)', () => {
+    it('retorna somente dados disponíveis na main e protege acessos', async () => {
+      const path = `/api/v1/providers/${ids.prestador}/public-profile`;
+      expect((await app.inject(path)).statusCode).toBe(401);
+      expect((await chamar('GET', path, ids.admin)).statusCode).toBe(404);
+      const stranger = randomUUID();
+      await database.query("insert into users (id, name, email, role) values ($1, 'Cliente isolado', 'isolado@teste.com', 'Cliente')", [stranger]);
+      expect((await chamar('GET', path, stranger)).statusCode).toBe(404);
+      expect((await chamar('GET', `/api/v1/providers/${ids.cliente}/public-profile`, ids.cliente)).statusCode).toBe(404);
+      const result = await chamar('GET', path, ids.cliente);
+      expect(result.statusCode).toBe(200);
+      const reviewsInstalled = (await database.query<{ installed: boolean }>("select to_regclass('public.avaliacoes') is not null as installed"))[0]!.installed;
+      expect(result.json()).toEqual({ id: ids.prestador, name: 'Pedro Prestador', photoUrl: null, region: null,
+        categories: null, completedServices: 0, reviewsAvailable: reviewsInstalled, reviewsCount: reviewsInstalled ? 0 : null, averageRating: null, reviews: [] });
+      expect(result.headers['cache-control']).toContain('no-store');
+    });
+
+    it('lê categorias/região do contrato profissional e últimas avaliações sem expor dados privados', async () => {
+      // Fixture de compatibilidade, somente colunas lidas. Não instala migrations externas.
+      // Fonte profissional: Resolvai_Backend/db/scripts/012 e 013 (a6c56d6).
+      // Fonte das avaliações: contrato da PR de backend #2; não depende do código daquela branch.
+      await database.query('create table fornecedores (id_usuario uuid primary key, nome_exibicao text, cidade_atuacao text, uf_atuacao text, cnpj text)');
+      await database.query('create table especialidades (codigo text primary key, nome text, is_active boolean)');
+      await database.query('create table fornecedor_especialidades (id_usuario uuid, codigo_especialidade text)');
+      await database.query('create table if not exists avaliacoes (id_pedido uuid primary key, id_cliente uuid, id_prestador uuid, nota smallint, comentario text, data_criacao timestamptz)');
+      const providerId = randomUUID();
+      await database.query("insert into users (id, name, email, role) values ($1, 'Prestador do perfil', 'perfil-isolado@teste.com', 'Prestador')", [providerId]);
+      const reviewCustomerId = randomUUID();
+      await database.query("insert into users (id, name, email, role) values ($1, 'Cliente das avaliações do perfil', 'avaliacoes-perfil@teste.com', 'Cliente')", [reviewCustomerId]);
+      await database.query("insert into fornecedores values ($1, 'Nome profissional', 'Fortaleza', 'CE', 'documento privado')", [providerId]);
+      await database.query("insert into especialidades values ('eletrica', 'Elétrica', true), ('pintura', 'Pintura', false)");
+      await database.query("insert into fornecedor_especialidades values ($1, 'eletrica'), ($1, 'pintura')", [providerId]);
+      const completed = randomUUID();
+      await database.query("insert into pedidos (id, id_cliente, status) values ($1, $2, 'concluido')", [completed, ids.cliente]);
+      // Duplicidade legada de propostas não deve duplicar a contagem de serviços.
+      await database.query("insert into propostas (id_pedido, id_prestador, status, valor) values ($1, $2, 'escolhida', 100), ($1, $2, 'escolhida', 100)", [completed, providerId]);
+      for (let index = 0; index < 6; index++) {
+        const orderId = randomUUID();
+        await database.query("insert into pedidos (id, id_cliente, status) values ($1, $2, 'concluido')", [orderId, reviewCustomerId]);
+        await database.query("insert into propostas (id_pedido, id_prestador, status, valor) values ($1, $2, 'escolhida', 100)", [orderId, providerId]);
+        await database.query("insert into avaliacoes (id_pedido, id_cliente, id_prestador, nota, comentario, data_criacao) values ($1, $2, $3, $4, $5, now() - $6 * interval '1 day')", [orderId, reviewCustomerId, providerId, index === 5 ? 1 : 5, index === 0 ? '<script>não executar</script>' : null, index]);
+      }
+      const result = (await chamar('GET', `/api/v1/providers/${providerId}/public-profile`, ids.cliente)).json();
+      expect(result).toMatchObject({ name: 'Nome profissional', region: 'Fortaleza, CE', categories: ['Elétrica'], completedServices: 7, reviewsAvailable: true });
+      expect(result.averageRating).toBeCloseTo(26 / 6);
+      expect(result.reviewsCount).toBe(6);
+      expect(result.reviews).toHaveLength(5);
+      expect(result.reviews[0].comment).toBe('<script>não executar</script>');
+      for (const field of ['email', 'cpf', 'cnpj', 'endereco', 'id_cliente', 'id_pedido']) expect(JSON.stringify(result)).not.toContain(`"${field}"`);
+      const spec = (await app.inject('/openapi/v1.json')).json();
+      expect(spec.paths['/api/v1/providers/{id}/public-profile'].get.security).toEqual([{ Bearer: [] }]);
     });
   });
 
