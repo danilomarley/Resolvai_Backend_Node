@@ -9,7 +9,7 @@ export type OrdenacaoPropostas = (typeof ordenacoesPropostas)[number];
 export type DirecaoPropostas = (typeof direcoesPropostas)[number];
 
 // Aceita o valor sem diferenciar maiúsculas, como o filtro de status de GET /api/v1/orders.
-const valorDaQuery = <T extends string>(campo: string, validos: readonly T[]) =>
+export const valorDaQuery = <T extends string>(campo: string, validos: readonly T[]) =>
   z
     .string()
     .optional()

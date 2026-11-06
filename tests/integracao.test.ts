@@ -19,6 +19,8 @@ import { AvaliacaoRepository } from '../src/infrastructure/repositories/avaliaca
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
+import { PrestadorService } from '../src/application/services/prestador-service.js';
+import { PropostaPrestadorService } from '../src/application/services/proposta-prestador-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { createDatabase, type Database } from '../src/infrastructure/database.js';
 import { ContatoRepository } from '../src/infrastructure/repositories/contato-repository.js';
@@ -26,6 +28,8 @@ import { EnderecoRepository } from '../src/infrastructure/repositories/endereco-
 import { PedidoQueries } from '../src/infrastructure/repositories/pedido-queries.js';
 import { PedidoRepository } from '../src/infrastructure/repositories/pedido-repository.js';
 import { PropostaRepository } from '../src/infrastructure/repositories/proposta-repository.js';
+import { PrestadorRepository } from '../src/infrastructure/repositories/prestador-repository.js';
+import { PropostaPrestadorRepository } from '../src/infrastructure/repositories/proposta-prestador-repository.js';
 import { UserRepository } from '../src/infrastructure/repositories/user-repository.js';
 import { FakeArmazenamento, FakeAssistente, FakeSupabase } from './fakes.js';
 
@@ -37,6 +41,7 @@ const ids = {
   cliente: '10000000-0000-4000-8000-000000000001',
   outroCliente: '10000000-0000-4000-8000-000000000002',
   prestador: '10000000-0000-4000-8000-000000000003',
+  prestadora: '10000000-0000-4000-8000-000000000005',
   admin: '10000000-0000-4000-8000-000000000004'
 };
 
@@ -72,7 +77,7 @@ describe('Integração com PostgreSQL', () => {
   const armazenamento = new FakeArmazenamento();
   const assistente = new FakeAssistente();
 
-  const chamar = async (method: 'GET' | 'POST' | 'PATCH', url: string, sub: string, payload?: unknown, email?: string) =>
+  const chamar = async (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, sub: string, payload?: unknown, email?: string) =>
     app.inject({ method, url, payload: payload as object, headers: { authorization: `Bearer ${await token(sub, email)}` } });
 
   beforeAll(async () => {
@@ -96,6 +101,7 @@ describe('Integração com PostgreSQL', () => {
         ('${ids.cliente}', 'Maria Cliente', 'maria@teste.com', 'Cliente', '11111111111'),
         ('${ids.outroCliente}', 'João Cliente', 'joao@teste.com', 'Cliente', null),
         ('${ids.prestador}', 'Pedro Prestador', 'pedro@teste.com', 'Prestador', '22222222222'),
+        ('${ids.prestadora}', 'Paula Prestadora', 'paula@teste.com', 'Prestador', '80000000001'),
         ('${ids.admin}', 'Ana Admin', 'ana@teste.com', 'Admin', null);
 
       insert into pedidos (id, id_cliente, escopo, status, data_criacao, data_atualizacao) values
@@ -115,9 +121,9 @@ describe('Integração com PostgreSQL', () => {
 
       insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, descricao, garantia) values
         ('40000000-0000-4000-8000-000000000001', '${pedido(1)}', '${ids.prestador}', 'enviada', 900.00, '5 dias', null, null),
-        ('40000000-0000-4000-8000-000000000002', '${pedido(1)}', '${ids.prestador}', 'visualizada', 500.50, null, 'Mais barata', '90 dias'),
+        ('40000000-0000-4000-8000-000000000002', '${pedido(1)}', '${ids.prestadora}', 'visualizada', 500.50, null, 'Mais barata', '90 dias'),
         ('40000000-0000-4000-8000-000000000003', '${pedido(2)}', '${ids.prestador}', 'escolhida', 1100.50, '3 dias', null, null),
-        ('40000000-0000-4000-8000-000000000004', '${pedido(2)}', '${ids.prestador}', 'enviada', 700.00, null, null, null);
+        ('40000000-0000-4000-8000-000000000004', '${pedido(2)}', '${ids.prestadora}', 'enviada', 700.00, null, null, null);
     `);
 
     const porta = await portaLivre();
@@ -140,7 +146,9 @@ describe('Integração com PostgreSQL', () => {
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
-        propostaService: new PropostaService(new PropostaRepository(database)),
+        propostaService: new PropostaService(new PropostaRepository(database), new PedidoQueries(database)),
+        prestadorService: new PrestadorService(new PrestadorRepository(database), users),
+        propostaPrestadorService: new PropostaPrestadorService(new PropostaPrestadorRepository(database), users),
         fotoPedidoService: new FotoPedidoService(armazenamento, users),
         assistentePedidoService: new AssistentePedidoService(assistente),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
@@ -223,7 +231,7 @@ describe('Integração com PostgreSQL', () => {
       { id: '30000000-0000-4000-8000-000000000002', url: 'pedidos/b.jpg' }
     ]);
     expect(corpo.proposals.map((p: { value: number }) => p.value)).toEqual([500.5, 900]);
-    expect(corpo.proposals[0]).toMatchObject({ providerName: 'Pedro Prestador', status: 'Viewed', warranty: '90 dias' });
+    expect(corpo.proposals[0]).toMatchObject({ providerName: 'Paula Prestadora', status: 'Viewed', warranty: '90 dias' });
 
     const comEscolhida = (await chamar('GET', `/api/v1/orders/${pedido(2)}`, ids.cliente)).json();
     expect(comEscolhida.proposals.map((p: { status: string }) => p.status)).toEqual(['Chosen', 'Sent']);
@@ -652,6 +660,319 @@ describe('Integração com PostgreSQL', () => {
 
     it('a migração 014 rejeita prazo numérico que não seja positivo', async () => {
       await expect(pglite.exec(`update propostas set prazo_dias = 0 where id = '${proposta.ana}'`)).rejects.toThrow(/ck_propostas_prazo_dias/);
+    });
+  });
+
+  describe('app do prestador', () => {
+    const u = {
+      maria: '71000000-0000-4000-8000-000000000001',
+      joao: '71000000-0000-4000-8000-000000000002',
+      paulo: '71000000-0000-4000-8000-0000000000a1',
+      pietra: '71000000-0000-4000-8000-0000000000a2',
+      pedro: '71000000-0000-4000-8000-0000000000a3'
+    };
+    const o = (n: number) => `72000000-0000-4000-8000-00000000000${n}`;
+    const escopo = (titulo: string, categoria: string, localizacao: string, extra = '') =>
+      `'{"titulo":"${titulo}","categoria":"${categoria}","descricao":"Descrição do pedido ${titulo} [zzp]","localizacao":"${localizacao}"${extra}}'`;
+    const proposta = { value: 450.5, deadlineDays: 10, description: 'Troco a tomada e testo o circuito', warranty: '90 dias de garantia' };
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+    let eletrica = '';
+    let pintura = '';
+    let propostaPaulo = '';
+    let propostaPedro = '';
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf) values
+          ('${u.maria}', 'Maria Silva Souza', 'maria.souza@exemplo.com', 'Cliente', '81000000001'),
+          ('${u.joao}', 'João Pereira', 'joao.p@exemplo.com', 'Cliente', '81000000002'),
+          ('${u.paulo}', 'Paulo Eletricista', 'paulo@exemplo.com', 'Prestador', '81000000011'),
+          ('${u.pietra}', 'Pietra Sem Cadastro', 'pietra@exemplo.com', 'Prestador', null),
+          ('${u.pedro}', 'Pedro Pintor', 'pedro.pintor@exemplo.com', 'Prestador', '81000000013');
+
+        insert into pedidos (id, id_cliente, escopo, status, data_criacao) values
+          ('${o(1)}', '${u.maria}', ${escopo('Tomada sem energia', 'Elétrica', 'Centro, Quixadá', ',"urgencia":"Urgente","detalhes":"Apartamento no 2º andar","especificacoes":"Trocar a tomada"')}, 'aberto', now() - interval '1 hour'),
+          ('${o(2)}', '${u.maria}', ${escopo('Pintar a sala', 'Pintura', 'Planalto, Quixadá')}, 'aberto', now() - interval '2 hours'),
+          ('${o(3)}', '${u.maria}', ${escopo('Vazamento na pia', 'Hidráulica', 'Centro, Sobral')}, 'aberto', now() - interval '3 hours'),
+          ('${o(4)}', '${u.maria}', ${escopo('Pedido cancelado', 'Elétrica', 'Centro, Quixadá')}, 'cancelado', now() - interval '5 hours'),
+          ('${o(5)}', '${u.maria}', ${escopo('Já contratado', 'Elétrica', 'Centro, Quixadá')}, 'aberto', now() - interval '6 hours'),
+          ('${o(6)}', '${u.joao}', ${escopo('Chuveiro queimado', 'Elétrica', 'Centro, Quixadá')}, 'aberto', now() - interval '4 hours');
+
+        insert into fotos_pedido (id, id_pedido, foto, descricao) values
+          ('73000000-0000-4000-8000-000000000001', '${o(1)}', 'https://exemplo.com/tomada.jpg', 'A tomada');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor) values
+          ('74000000-0000-4000-8000-000000000001', '${o(5)}', '${u.pedro}', 'escolhida', 300);
+      `);
+    });
+
+    const login = (sub: string) => sub;
+
+    it('o catálogo de categorias vem do script 015 e serve a qualquer usuário autenticado', async () => {
+      const resposta = await chamar('GET', '/api/v1/catalog/categories', u.maria);
+      expect(resposta.statusCode).toBe(200);
+      const categorias = resposta.json() as { id: string; slug: string; name: string }[];
+      expect(categorias.length).toBeGreaterThanOrEqual(15);
+      expect(categorias.map(c => c.name)).toEqual(expect.arrayContaining(['Elétrica', 'Hidráulica', 'Pintura', 'Impermeabilização']));
+      eletrica = categorias.find(c => c.slug === 'eletrica')!.id;
+      pintura = categorias.find(c => c.slug === 'pintura')!.id;
+      expect((await app.inject({ method: 'GET', url: '/api/v1/catalog/categories' })).statusCode).toBe(401);
+    });
+
+    it('rotas do prestador respondem 403 para quem não é Prestador e 401 sem token', async () => {
+      for (const url of ['/api/v1/provider/profile', '/api/v1/provider/summary', '/api/v1/provider/orders', '/api/v1/provider/proposals']) {
+        expect((await chamar('GET', url, u.maria)).statusCode).toBe(403);
+        expect((await app.inject({ method: 'GET', url })).statusCode).toBe(401);
+      }
+    });
+
+    it('cadastro público do prestador cria o perfil com papel Prestador', async () => {
+      const resposta = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register-provider',
+        payload: { name: 'Rita Reformas', email: 'Rita@Exemplo.com', password: 'SenhaForte123' }
+      });
+      expect(resposta.statusCode).toBe(201);
+      expect(resposta.json()).toMatchObject({ email: 'rita@exemplo.com', role: 'Prestador' });
+      expect((await app.inject({ method: 'POST', url: '/api/v1/auth/register-provider', payload: { name: 'Rita', email: 'RITA@exemplo.com', password: 'SenhaForte123' } })).statusCode).toBe(409);
+    });
+
+    it('perfil começa vazio e só fica completo com cadastro finalizado, categoria e cidade', async () => {
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/profile', login(u.paulo))))).toEqual({
+        categories: [], cities: [], registrationComplete: true, onboardingComplete: false
+      });
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/profile', u.pietra)))).toMatchObject({ registrationComplete: false, onboardingComplete: false });
+    });
+
+    it('PUT do perfil substitui categorias e cidades, ignora cidade repetida e valida entradas', async () => {
+      const resposta = await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [eletrica, pintura, eletrica], cities: ['Quixadá', '  quixada ', 'Maracanaú'] });
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toMatchObject({ cities: ['Maracanaú', 'Quixadá'], registrationComplete: true, onboardingComplete: true });
+      expect(resposta.json().categories.map((c: { slug: string }) => c.slug)).toEqual(['eletrica', 'pintura']);
+
+      expect((await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [randomUUID()], cities: ['Fortaleza'] })).statusCode).toBe(400);
+      expect((await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [], cities: [] })).statusCode).toBe(400);
+      expect((await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [eletrica], cities: ['x'] })).statusCode).toBe(400);
+      // Pietra não finalizou o cadastro: escolher áreas não completa o onboarding.
+      const pietra = await chamar('PUT', '/api/v1/provider/profile', u.pietra, { categoryIds: [eletrica], cities: ['Quixadá'] });
+      expect(pietra.json()).toMatchObject({ registrationComplete: false, onboardingComplete: false });
+      // Pedro, na pintura de Quixadá, fica fora dos pedidos de elétrica.
+      await chamar('PUT', '/api/v1/provider/profile', u.pedro, { categoryIds: [pintura], cities: ['Quixadá'] });
+    });
+
+    it('resumo conta pedidos novos e compatíveis só entre os abertos sem proposta escolhida', async () => {
+      const corpo = await corpoDe(chamar('GET', '/api/v1/provider/summary', u.paulo));
+      // Há pedidos de outros testes no mesmo banco: os novos são ao menos os 4 deste bloco; os compatíveis (Quixadá) são só os daqui.
+      expect(corpo.newOrdersLast24h).toBeGreaterThanOrEqual(4);
+      expect(corpo.compatibleOpenOrders).toBe(3);
+      expect(corpo.proposals).toEqual({ total: 0, sent: 0, viewed: 0, chosen: 0, notChosen: 0 });
+    });
+
+    it('feed: compatíveis primeiro, sem pedidos encerrados ou já contratados, e sem dados pessoais do contratante', async () => {
+      const resposta = await chamar('GET', '/api/v1/provider/orders?q=zzp', u.paulo);
+      expect(resposta.statusCode).toBe(200);
+      const corpo = resposta.json();
+      expect(corpo.items.map((i: { id: string }) => i.id)).toEqual([o(1), o(2), o(6), o(3)]);
+      expect(corpo.items.map((i: { compatible: boolean }) => i.compatible)).toEqual([true, true, true, false]);
+      expect(corpo).toMatchObject({ page: 1, pageSize: 10, totalItems: 4, totalPages: 1 });
+      expect(corpo.items[0]).toEqual({
+        id: o(1), title: 'Tomada sem energia', category: 'Elétrica', location: 'Centro, Quixadá', urgency: 'Urgente',
+        createdAt: expect.any(String), proposalsCount: 0, coverPhotoUrl: 'https://exemplo.com/tomada.jpg',
+        customerFirstName: 'Maria', compatible: true
+      });
+      const texto = JSON.stringify(corpo);
+      for (const proibido of ['Souza', 'maria.souza', '81000000001', 'João Pereira', 'joao.p@']) expect(texto).not.toContain(proibido);
+    });
+
+    it('feed: filtros por categoria, cidade, urgência, texto e compatibilidade, e paginação', async () => {
+      // [zzp] marca os pedidos deste bloco no texto; cidade e categoria usam os próprios filtros.
+      const ids = async (query: string) => (await corpoDe(chamar('GET', `/api/v1/provider/orders${query}`, u.paulo))).items.map((i: { id: string }) => i.id);
+      expect(await ids('?q=zzp&category=eletrica')).toEqual([o(1), o(6)]);
+      expect(await ids('?q=zzp&category=ELETRICA')).toEqual([o(1), o(6)]);
+      expect(await ids('?q=zzp&city=SOBRAL')).toEqual([o(3)]);
+      expect(await ids('?q=zzp&city=quixada&compatible=true')).toEqual([o(1), o(2), o(6)]);
+      expect(await ids('?compatible=true')).toEqual([o(1), o(2), o(6)]);
+      expect(await ids('?q=zzp&urgency=Urgente')).toEqual([o(1)]);
+      expect(await ids('?q=TOMADA')).toEqual([o(1)]);
+      expect(await ids('?q=pintar+a+sala')).toEqual([o(2)]);
+      expect(await ids('?q=nada-disso')).toEqual([]);
+      expect(await ids('?q=zzp&category=inexistente')).toEqual([]);
+      const pagina2 = await corpoDe(chamar('GET', '/api/v1/provider/orders?q=zzp&pageSize=3&page=2', u.paulo));
+      expect(pagina2).toMatchObject({ page: 2, pageSize: 3, totalItems: 4, totalPages: 2 });
+      expect(pagina2.items.map((i: { id: string }) => i.id)).toEqual([o(3)]);
+      expect((await chamar('GET', '/api/v1/provider/orders?pageSize=0', u.paulo)).statusCode).toBe(400);
+      expect((await chamar('GET', '/api/v1/provider/orders?compatible=talvez', u.paulo)).statusCode).toBe(400);
+      // Para o Pedro (pintura em Fortaleza) só o pedido de pintura é compatível.
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/orders?compatible=true', u.pedro))).items.map((i: { id: string }) => i.id)).toEqual([o(2)]);
+    });
+
+    it('detalhe: escopo completo e fotos para pedido aberto; 404 para encerrado ou inexistente', async () => {
+      const corpo = await corpoDe(chamar('GET', `/api/v1/provider/orders/${o(1)}`, u.paulo));
+      expect(corpo).toMatchObject({
+        id: o(1), title: 'Tomada sem energia', description: 'Descrição do pedido Tomada sem energia [zzp]', details: 'Apartamento no 2º andar',
+        specifications: 'Trocar a tomada', urgency: 'Urgente', status: 'Pending', open: true, compatible: true, customerFirstName: 'Maria'
+      });
+      expect(corpo.photos).toEqual([{ id: '73000000-0000-4000-8000-000000000001', url: 'https://exemplo.com/tomada.jpg', description: 'A tomada' }]);
+      expect(corpo).not.toHaveProperty('myProposal');
+      expect(JSON.stringify(corpo)).not.toContain('Souza');
+
+      expect((await chamar('GET', `/api/v1/provider/orders/${o(4)}`, u.paulo)).statusCode).toBe(404);
+      expect((await chamar('GET', `/api/v1/provider/orders/${randomUUID()}`, u.paulo)).statusCode).toBe(404);
+      expect((await chamar('GET', '/api/v1/provider/orders/abc', u.paulo)).statusCode).toBe(404);
+      // Pedido já contratado continua visível, mas deixa claro que não recebe mais propostas.
+      expect((await corpoDe(chamar('GET', `/api/v1/provider/orders/${o(5)}`, u.paulo))).open).toBe(false);
+    });
+
+    it('enviar proposta: 201 com prazo em texto, e recusa duplicada, pedido fechado e dados inválidos', async () => {
+      const resposta = await chamar('POST', `/api/v1/provider/orders/${o(1)}/proposals`, u.paulo, proposta);
+      expect(resposta.statusCode).toBe(201);
+      const corpo = resposta.json();
+      propostaPaulo = corpo.id;
+      expect(corpo).toMatchObject({
+        orderId: o(1), orderTitle: 'Tomada sem energia', orderStatus: 'Pending', status: 'Sent', value: 450.5,
+        deadline: '10 dias', deadlineDays: 10, description: proposta.description, warranty: proposta.warranty
+      });
+      expect(resposta.headers.location).toContain(`/api/v1/provider/proposals/${corpo.id}`);
+
+      const duplicada = await chamar('POST', `/api/v1/provider/orders/${o(1)}/proposals`, u.paulo, proposta);
+      expect(duplicada.statusCode).toBe(409);
+      expect(duplicada.json().detail).toContain('já enviou uma proposta');
+      expect((await chamar('POST', `/api/v1/provider/orders/${o(4)}/proposals`, u.paulo, proposta)).json().detail).toBe('Este pedido não recebe mais propostas.');
+      expect((await chamar('POST', `/api/v1/provider/orders/${o(5)}/proposals`, u.paulo, proposta)).statusCode).toBe(409);
+      expect((await chamar('POST', `/api/v1/provider/orders/${randomUUID()}/proposals`, u.paulo, proposta)).statusCode).toBe(404);
+
+      const semCadastro = await chamar('POST', `/api/v1/provider/orders/${o(2)}/proposals`, u.pietra, proposta);
+      expect(semCadastro.statusCode).toBe(400);
+      expect(semCadastro.json().detail).toBe('Finalize o cadastro antes de enviar uma proposta.');
+
+      for (const invalido of [
+        { ...proposta, value: 0 }, { ...proposta, value: 10.123 }, { ...proposta, value: -5 },
+        { ...proposta, deadlineDays: 0 }, { ...proposta, deadlineDays: 366 }, { ...proposta, deadlineDays: 2.5 },
+        { ...proposta, description: 'curta' }, { ...proposta, warranty: 'ab' }, { ...proposta, warranty: '   ' },
+        { ...proposta, extra: 1 }, { value: 100 }
+      ]) {
+        expect((await chamar('POST', `/api/v1/provider/orders/${o(2)}/proposals`, u.paulo, invalido)).statusCode, JSON.stringify(invalido)).toBe(400);
+      }
+
+      const outra = await chamar('POST', `/api/v1/provider/orders/${o(1)}/proposals`, u.pedro, { ...proposta, value: 520, deadlineDays: 1 });
+      expect(outra.statusCode).toBe(201);
+      expect(outra.json().deadline).toBe('1 dia');
+      propostaPedro = outra.json().id;
+    });
+
+    it('feed e detalhe passam a mostrar a proposta enviada e a contagem do pedido', async () => {
+      const item = (await corpoDe(chamar('GET', '/api/v1/provider/orders?q=zzp', u.paulo))).items.find((i: { id: string }) => i.id === o(1));
+      expect(item).toMatchObject({ myProposalId: propostaPaulo, proposalsCount: 2 });
+      const detalhe = await corpoDe(chamar('GET', `/api/v1/provider/orders/${o(1)}`, u.paulo));
+      expect(detalhe.myProposal).toMatchObject({ id: propostaPaulo, status: 'Sent', value: 450.5 });
+    });
+
+    it('minhas propostas: filtro por status, busca, totais e isolamento entre prestadores', async () => {
+      const lista = await corpoDe(chamar('GET', '/api/v1/provider/proposals', u.paulo));
+      expect(lista.items.map((i: { id: string }) => i.id)).toEqual([propostaPaulo]);
+      expect(lista).toMatchObject({ totalItems: 1, counts: { total: 1, sent: 1, viewed: 0, chosen: 0, notChosen: 0 } });
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/proposals?status=sent', u.paulo))).totalItems).toBe(1);
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/proposals?status=Chosen', u.paulo))).totalItems).toBe(0);
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/proposals?q=TOMADA', u.paulo))).totalItems).toBe(1);
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/proposals?q=pintar', u.paulo))).totalItems).toBe(0);
+      expect((await chamar('GET', '/api/v1/provider/proposals?status=outra', u.paulo)).statusCode).toBe(400);
+
+      expect((await chamar('GET', `/api/v1/provider/proposals/${propostaPaulo}`, u.paulo)).statusCode).toBe(200);
+      expect((await chamar('GET', `/api/v1/provider/proposals/${propostaPaulo}`, u.pedro)).statusCode).toBe(404);
+      const doPedro = await corpoDe(chamar('GET', '/api/v1/provider/proposals', u.pedro));
+      expect(doPedro.items.map((i: { id: string }) => i.id)).toEqual([propostaPedro, '74000000-0000-4000-8000-000000000001']);
+      expect(doPedro.counts).toEqual({ total: 2, sent: 1, viewed: 0, chosen: 1, notChosen: 0 });
+    });
+
+    it('editar proposta: altera campos, reescreve o prazo em texto e recusa vazio ou de outro prestador', async () => {
+      const resposta = await chamar('PATCH', `/api/v1/provider/proposals/${propostaPaulo}`, u.paulo, { value: 400, deadlineDays: 5 });
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toMatchObject({ value: 400, deadlineDays: 5, deadline: '5 dias', description: proposta.description });
+      expect((await chamar('PATCH', `/api/v1/provider/proposals/${propostaPaulo}`, u.paulo, {})).statusCode).toBe(400);
+      expect((await chamar('PATCH', `/api/v1/provider/proposals/${propostaPaulo}`, u.paulo, { value: 0 })).statusCode).toBe(400);
+      expect((await chamar('PATCH', `/api/v1/provider/proposals/${propostaPaulo}`, u.pedro, { value: 100 })).statusCode).toBe(404);
+    });
+
+    it('o contratante abrir o detalhe marca a proposta como visualizada para o prestador', async () => {
+      const detalhe = await corpoDe(chamar('GET', `/api/v1/orders/${o(1)}/proposals/${propostaPaulo}`, u.maria));
+      expect(detalhe.status).toBe('Viewed');
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/proposals', u.paulo))).counts).toMatchObject({ sent: 0, viewed: 1 });
+      // Visualizada ainda pode ser editada.
+      expect((await chamar('PATCH', `/api/v1/provider/proposals/${propostaPaulo}`, u.paulo, { warranty: '120 dias de garantia' })).statusCode).toBe(200);
+    });
+
+    it('aceite (#84): escolhe a proposta, marca as outras como NotChosen e mantém o pedido aberto', async () => {
+      const antes = (await corpoDe(chamar('GET', '/api/v1/home/summary', u.maria))).proposals;
+
+      expect((await chamar('POST', `/api/v1/orders/${o(1)}/proposals/${propostaPaulo}/accept`, u.joao)).statusCode).toBe(404);
+      expect((await chamar('POST', `/api/v1/orders/${o(2)}/proposals/${propostaPaulo}/accept`, u.maria)).statusCode).toBe(404);
+      expect((await chamar('POST', `/api/v1/orders/${o(1)}/proposals/abc/accept`, u.maria)).statusCode).toBe(404);
+      expect((await app.inject({ method: 'POST', url: `/api/v1/orders/${o(1)}/proposals/${propostaPaulo}/accept` })).statusCode).toBe(401);
+
+      const resposta = await chamar('POST', `/api/v1/orders/${o(1)}/proposals/${propostaPaulo}/accept`, u.maria);
+      expect(resposta.statusCode).toBe(200);
+      const pedido = resposta.json();
+      expect(pedido.status).toBe('Pending');
+      expect(Object.fromEntries(pedido.proposals.map((p: { id: string; status: string }) => [p.id, p.status]))).toEqual({
+        [propostaPaulo]: 'Chosen', [propostaPedro]: 'NotChosen'
+      });
+      expect(pedido.updatedAt).toEqual(expect.any(String));
+
+      const repetido = await chamar('POST', `/api/v1/orders/${o(1)}/proposals/${propostaPaulo}/accept`, u.maria);
+      expect(repetido.statusCode).toBe(409);
+      expect(repetido.json().detail).toBe('Este pedido já tem uma proposta aceita.');
+      expect((await chamar('POST', `/api/v1/orders/${o(1)}/proposals/${propostaPedro}/accept`, u.maria)).statusCode).toBe(409);
+      // Pedido encerrado não aceita.
+      await pglite.exec(`insert into propostas (id_pedido, id_prestador, status, valor) values ('${o(4)}', '${u.paulo}', 'enviada', 10)`);
+      const propostaNoCancelado = (await pglite.query<{ id: string }>(`select id from propostas where id_pedido = '${o(4)}'`)).rows[0]!.id;
+      expect((await chamar('POST', `/api/v1/orders/${o(4)}/proposals/${propostaNoCancelado}/accept`, u.maria)).json().detail).toContain('não aceita mais');
+      await pglite.exec(`delete from propostas where id_pedido = '${o(4)}'`);
+
+      // As duas propostas do pedido deixaram de aguardar decisão na Home do contratante.
+      const depois = (await corpoDe(chamar('GET', '/api/v1/home/summary', u.maria))).proposals;
+      expect(depois.awaitingDecision).toBe(antes.awaitingDecision - 2);
+    });
+
+    it('depois do aceite: prestador vê Chosen e NotChosen, não edita nem retira, e o pedido sai do feed', async () => {
+      const paulo = await corpoDe(chamar('GET', '/api/v1/provider/proposals', u.paulo));
+      expect(paulo.items[0]).toMatchObject({ id: propostaPaulo, status: 'Chosen', orderStatus: 'Pending' });
+      expect(paulo.counts).toMatchObject({ chosen: 1, notChosen: 0 });
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/proposals', u.pedro))).counts).toMatchObject({ notChosen: 1 });
+
+      for (const [sub, id] of [[u.paulo, propostaPaulo], [u.pedro, propostaPedro]] as const) {
+        expect((await chamar('PATCH', `/api/v1/provider/proposals/${id}`, sub, { value: 1 })).statusCode).toBe(409);
+        expect((await chamar('DELETE', `/api/v1/provider/proposals/${id}`, sub)).statusCode).toBe(409);
+      }
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/orders?q=zzp', u.paulo))).items.map((i: { id: string }) => i.id)).not.toContain(o(1));
+      expect((await corpoDe(chamar('GET', `/api/v1/provider/orders/${o(1)}`, u.pedro))).open).toBe(false);
+      expect((await chamar('POST', `/api/v1/provider/orders/${o(1)}/proposals`, u.pietra, proposta)).statusCode).toBe(400); // sem cadastro
+    });
+
+    it('retirar proposta: 204, libera nova proposta e respeita o dono', async () => {
+      const criada = await chamar('POST', `/api/v1/provider/orders/${o(2)}/proposals`, u.paulo, proposta);
+      expect(criada.statusCode).toBe(201);
+      const id = criada.json().id;
+      expect((await chamar('DELETE', `/api/v1/provider/proposals/${id}`, u.pedro)).statusCode).toBe(404);
+      const retirada = await chamar('DELETE', `/api/v1/provider/proposals/${id}`, u.paulo);
+      expect(retirada.statusCode).toBe(204);
+      expect(retirada.body).toBe('');
+      expect((await chamar('GET', `/api/v1/provider/proposals/${id}`, u.paulo)).statusCode).toBe(404);
+      expect((await chamar('DELETE', `/api/v1/provider/proposals/${id}`, u.paulo)).statusCode).toBe(404);
+      expect((await chamar('POST', `/api/v1/provider/orders/${o(2)}/proposals`, u.paulo, proposta)).statusCode).toBe(201);
+    });
+
+    it('o banco impede proposta duplicada e duas propostas escolhidas no mesmo pedido', async () => {
+      await expect(pglite.exec(`insert into propostas (id_pedido, id_prestador, status, valor) values ('${o(1)}', '${u.paulo}', 'enviada', 1)`)).rejects.toThrow(/uq_propostas_pedido_prestador/);
+      await expect(pglite.exec(`insert into propostas (id_pedido, id_prestador, status, valor) values ('${o(1)}', '${u.pietra}', 'escolhida', 1)`)).rejects.toThrow(/uq_propostas_escolhida_por_pedido/);
+    });
+
+    it('os scripts 015, 016 e 017 podem ser reaplicados sem erro e sem perder dados', async () => {
+      const pasta = join(import.meta.dirname, '..', 'db', 'scripts');
+      for (const arquivo of ['015_create_categorias_servico.sql', '016_create_perfil_prestador.sql', '017_alter_propostas_status_e_unicidade.sql']) {
+        await pglite.exec(readFileSync(join(pasta, arquivo), 'utf8'));
+      }
+      expect((await pglite.query<{ n: number }>('select count(*)::int as n from categorias_servico')).rows[0]!.n).toBeGreaterThanOrEqual(15);
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/profile', u.paulo))).cities).toEqual(['Maracanaú', 'Quixadá']);
     });
   });
 

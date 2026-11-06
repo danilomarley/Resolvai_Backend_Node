@@ -17,7 +17,7 @@ import { criarPagina, type PaginaResponse } from '../src/application/dtos/common
 import type { ResumoHomeResponse } from '../src/application/dtos/home.js';
 import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse, PropostaResponse } from '../src/application/dtos/pedidos.js';
 import type { DirecaoPropostas, OrdenacaoPropostas, PropostaDetalheResponse } from '../src/application/dtos/propostas.js';
-import type { IPropostaRepository } from '../src/application/services/proposta-service.js';
+import type { IPropostaRepository, ResultadoAceite } from '../src/application/services/proposta-service.js';
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
@@ -97,6 +97,8 @@ export class FakePropostaRepository implements IPropostaRepository {
   propostas: PropostaResponse[] | null = [];
   detalhe: PropostaDetalheResponse | null = null;
   markResult = true;
+  acceptResult: ResultadoAceite = 'ok';
+  accepted = 0;
   marked = 0;
   calls = 0;
   lastList?: { orderId: string; customerId: string; sort: OrdenacaoPropostas; direction: DirecaoPropostas };
@@ -117,6 +119,11 @@ export class FakePropostaRepository implements IPropostaRepository {
   async markViewed() {
     this.marked++;
     return this.markResult;
+  }
+
+  async accept() {
+    this.accepted++;
+    return this.acceptResult;
   }
 }
 

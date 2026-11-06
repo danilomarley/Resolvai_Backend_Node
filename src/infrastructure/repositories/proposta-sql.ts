@@ -7,6 +7,7 @@ export const statusPropostaColumn = `
        when 'enviada' then 'Sent'
        when 'visualizada' then 'Viewed'
        when 'escolhida' then 'Chosen'
+       when 'nao_escolhida' then 'NotChosen'
   end`;
 
 /**

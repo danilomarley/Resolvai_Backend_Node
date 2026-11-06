@@ -1,4 +1,4 @@
-import type { IPropostaRepository } from '../../application/services/proposta-service.js';
+import type { IPropostaRepository, ResultadoAceite } from '../../application/services/proposta-service.js';
 import type { PropostaResponse } from '../../application/dtos/pedidos.js';
 import type { DirecaoPropostas, OrdenacaoPropostas, PropostaDetalheResponse } from '../../application/dtos/propostas.js';
 import type { Database } from '../database.js';
@@ -60,6 +60,50 @@ export class PropostaRepository implements IPropostaRepository {
     }
 
     return { ...toProposta(row), providerProfile: { memberSince: row.memberSince.toISOString(), completedServices: row.completedServices } };
+  }
+
+  accept(orderId: string, proposalId: string, customerId: string): Promise<ResultadoAceite> {
+    return this.database.transaction(async sql => {
+      const [pedido] = await sql.query<{ status: string }>(
+        'select status as "status" from public.pedidos where id = $1 and id_cliente = $2 for update;',
+        [orderId, customerId]
+      );
+      if (!pedido) {
+        return 'notFound';
+      }
+
+      const [proposta] = await sql.query<{ status: string }>(
+        'select status as "status" from public.propostas where id = $1 and id_pedido = $2 for update;',
+        [proposalId, orderId]
+      );
+      if (!proposta) {
+        return 'notFound';
+      }
+
+      if (pedido.status !== 'aberto') {
+        return 'orderClosed';
+      }
+
+      const [escolhida] = await sql.query(
+        "select 1 as \"ok\" from public.propostas where id_pedido = $1 and status = 'escolhida';",
+        [orderId]
+      );
+      if (escolhida) {
+        return 'alreadyChosen';
+      }
+
+      if (!['enviada', 'visualizada'].includes(proposta.status)) {
+        return 'proposalUnavailable';
+      }
+
+      await sql.query("update public.propostas set status = 'escolhida' where id = $1;", [proposalId]);
+      await sql.query(
+        "update public.propostas set status = 'nao_escolhida' where id_pedido = $1 and id <> $2 and status in ('enviada', 'visualizada');",
+        [orderId, proposalId]
+      );
+      await sql.query('update public.pedidos set data_atualizacao = now() where id = $1;', [orderId]);
+      return 'ok';
+    });
   }
 
   async markViewed(orderId: string, proposalId: string, customerId: string): Promise<boolean> {
