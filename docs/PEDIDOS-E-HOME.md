@@ -44,6 +44,7 @@ Todas exigem `Authorization: Bearer <accessToken>` obtido no login. Todos os pap
 | `enviada` | `Sent` |
 | `visualizada` | `Viewed` |
 | `escolhida` | `Chosen` |
+| `nao_escolhida` | `NotChosen` |
 
 ### Conteúdo esperado em `pedidos.escopo`
 
@@ -229,7 +230,7 @@ Mantém o contrato anterior (`orders.total/pending/inProgress/completed/cancelle
 | `orders.active` | `pending + inProgress` (card "Pedidos ativos") |
 | `orders.createdLast7Days` | pedidos criados nos últimos 7 dias, pelo relógio do banco ("novos nesta semana") |
 | `proposals.total` | todas as propostas recebidas nos pedidos do usuário |
-| `proposals.awaitingDecision` | propostas em pedidos `Pending`, que ainda aguardam escolha ("Propostas recebidas") |
+| `proposals.awaitingDecision` | propostas `Sent` ou `Viewed` em pedidos `Pending`, que ainda aguardam escolha ("Propostas recebidas") |
 | `proposals.unviewed` | dessas, as que estão com status `enviada` ("propostas para conferir") |
 
 Cada item de `recentOrders` tem o mesmo formato dos itens de `GET /api/v1/orders`, e a lista é limitada a 5. Os totais consideram todos os pedidos do usuário, independentemente desse limite. Sem pedidos, todos os contadores são zero e a lista vem vazia.

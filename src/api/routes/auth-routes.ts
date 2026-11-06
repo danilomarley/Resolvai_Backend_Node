@@ -10,6 +10,7 @@ import {
 } from '../../application/dtos/auth.js';
 import { userResponseSchema } from '../../application/dtos/users.js';
 import type { AuthService } from '../../application/services/auth-service.js';
+import { UserRole } from '../../domain/enums.js';
 import { LimitadorDeTentativas } from '../limitador.js';
 import { semCache, urlAbsoluta } from './util.js';
 
@@ -45,6 +46,21 @@ export function authRoutes(authService: AuthService) {
       },
       handler: async (request, reply) => {
         const user = await authService.register(request.body);
+        return reply.code(201).header('Location', urlAbsoluta(request, `/api/v1/users/${user.id}`)).send(user);
+      }
+    });
+
+    rotas.post('/api/v1/auth/register-provider', {
+      schema: {
+        tags: ['Auth'],
+        summary: 'Auto-cadastro público do prestador de serviços (papel Prestador).',
+        description:
+          'Igual ao cadastro do contratante, mas o perfil local nasce com o papel Prestador. Depois do login, o prestador finaliza o cadastro (CPF, endereço e contato) e escolhe categorias e cidades em PUT /api/v1/provider/profile.',
+        body: registerRequestSchema,
+        response: { 201: userResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const user = await authService.register(request.body, UserRole.Prestador);
         return reply.code(201).header('Location', urlAbsoluta(request, `/api/v1/users/${user.id}`)).send(user);
       }
     });

@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { PropostaService, type IPropostaRepository } from '../src/application/services/proposta-service.js';
-import { NotFoundException, UnauthorizedException } from '../src/application/errors.js';
+import { ConflictException, NotFoundException, UnauthorizedException } from '../src/application/errors.js';
+import type { IPedidoQueries } from '../src/application/contracts.js';
+import { pedidoDeTeste } from './fakes.js';
 import { propostaDeTeste } from './fakes.js';
 
 describe('PropostaService', () => {
@@ -13,8 +15,9 @@ describe('PropostaService', () => {
     providerProfile: { memberSince: new Date().toISOString(), completedServices: 0 }
   });
   const novo = () => {
-    const repository: IPropostaRepository = { list: vi.fn(), getById: vi.fn(), markViewed: vi.fn() };
-    return { repository, service: new PropostaService(repository) };
+    const repository: IPropostaRepository = { list: vi.fn(), getById: vi.fn(), markViewed: vi.fn(), accept: vi.fn() };
+    const pedidos: IPedidoQueries = { list: vi.fn(), getById: vi.fn(), getSummary: vi.fn() };
+    return { repository, pedidos, service: new PropostaService(repository, pedidos) };
   };
 
   it('exige usuário autenticado com identificação', async () => {
@@ -71,5 +74,37 @@ describe('PropostaService', () => {
     vi.mocked(repository.getById).mockResolvedValue(null);
     await expect(service.getById(user, orderId, proposalId)).rejects.toBeInstanceOf(NotFoundException);
     expect(repository.markViewed).not.toHaveBeenCalled();
+  });
+
+  describe('aceite (#84)', () => {
+    it('exige usuário autenticado e não consulta o banco sem ele', async () => {
+      const { repository, service } = novo();
+      await expect(service.aceitar({ isAuthenticated: false }, orderId, proposalId)).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(repository.accept).not.toHaveBeenCalled();
+    });
+
+    it('devolve o pedido atualizado quando aceita', async () => {
+      const { repository, pedidos, service } = novo();
+      vi.mocked(repository.accept).mockResolvedValue('ok');
+      vi.mocked(pedidos.getById).mockResolvedValue(pedidoDeTeste(orderId));
+      await expect(service.aceitar(user, orderId, proposalId)).resolves.toMatchObject({ id: orderId, status: 'Pending' });
+      expect(repository.accept).toHaveBeenCalledWith(orderId, proposalId, user.id);
+      expect(pedidos.getById).toHaveBeenCalledWith(orderId, user.id);
+    });
+
+    it('mapeia cada resultado para o erro certo', async () => {
+      const { repository, service } = novo();
+      for (const [resultado, erro, trecho] of [
+        ['notFound', NotFoundException, 'Proposta'],
+        ['orderClosed', ConflictException, 'não aceita mais'],
+        ['alreadyChosen', ConflictException, 'já tem uma proposta aceita'],
+        ['proposalUnavailable', ConflictException, 'não pode mais ser aceita']
+      ] as const) {
+        vi.mocked(repository.accept).mockResolvedValueOnce(resultado);
+        const falha = await service.aceitar(user, orderId, proposalId).catch(error => error);
+        expect(falha).toBeInstanceOf(erro);
+        expect(falha.message).toContain(trecho);
+      }
+    });
   });
 });

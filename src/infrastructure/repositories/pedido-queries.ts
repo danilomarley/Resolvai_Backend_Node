@@ -159,7 +159,7 @@ export class PedidoQueries implements IPedidoQueries {
 
       const [propostas] = await sql.query<ContagemPropostasResponse>(
         `select count(*) as "total",
-                count(*) filter (where p.status = 'aberto') as "awaitingDecision",
+                count(*) filter (where p.status = 'aberto' and pr.status in ('enviada', 'visualizada')) as "awaitingDecision",
                 count(*) filter (where p.status = 'aberto' and pr.status = 'enviada') as "unviewed"
            from public.propostas pr
            join public.pedidos p on p.id = pr.id_pedido

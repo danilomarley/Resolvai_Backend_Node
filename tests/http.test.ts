@@ -11,6 +11,8 @@ import { AvaliacaoService } from '../src/application/services/avaliacao-service.
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
+import { PrestadorService, type IPrestadorRepository } from '../src/application/services/prestador-service.js';
+import { PropostaPrestadorService, type IPropostaPrestadorRepository } from '../src/application/services/proposta-prestador-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { Email } from '../src/domain/email.js';
 import { UserRole } from '../src/domain/enums.js';
@@ -64,7 +66,9 @@ describe('API HTTP', () => {
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
-        propostaService: new PropostaService(propostas),
+        propostaService: new PropostaService(propostas, queries),
+        prestadorService: new PrestadorService({ async listCategorias() { return []; } } as unknown as IPrestadorRepository, users),
+        propostaPrestadorService: new PropostaPrestadorService({} as unknown as IPropostaPrestadorRepository, users),
         fotoPedidoService: new FotoPedidoService(new FakeArmazenamento(), users),
         assistentePedidoService: new AssistentePedidoService(new FakeAssistente()),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })

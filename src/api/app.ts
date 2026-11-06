@@ -10,6 +10,8 @@ import type { AuthService } from '../application/services/auth-service.js';
 import { type FotoPedidoService, tamanhoMaximoFoto } from '../application/services/foto-pedido-service.js';
 import type { PedidoService } from '../application/services/pedido-service.js';
 import type { PropostaService } from '../application/services/proposta-service.js';
+import type { PrestadorService } from '../application/services/prestador-service.js';
+import type { PropostaPrestadorService } from '../application/services/proposta-prestador-service.js';
 import type { UserService } from '../application/services/user-service.js';
 import { criarHookDeAutenticacao, type VerificarToken } from './authentication.js';
 import { gerarTraceId, registrarTratamentoDeErros } from './problem-details.js';
@@ -17,6 +19,7 @@ import { authRoutes } from './routes/auth-routes.js';
 import { homeRoutes } from './routes/home-routes.js';
 import { pedidosRoutes } from './routes/pedidos-routes.js';
 import { propostasRoutes } from './routes/propostas-routes.js';
+import { prestadorRoutes } from './routes/prestador-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
 import { avaliacoesRoutes } from './routes/avaliacoes-routes.js';
 import type { AvaliacaoService } from '../application/services/avaliacao-service.js';
@@ -27,6 +30,8 @@ export interface Dependencias {
   userService: UserService;
   pedidoService: PedidoService;
   propostaService: PropostaService;
+  prestadorService: PrestadorService;
+  propostaPrestadorService: PropostaPrestadorService;
   fotoPedidoService: FotoPedidoService;
   assistentePedidoService: AssistentePedidoService;
   /** Usado pela autenticação para aplicar papel e situação do perfil local. */
@@ -110,6 +115,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
     await protegido.register(usersRoutes(dependencias.userService));
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(propostasRoutes(dependencias.propostaService));
+    await protegido.register(prestadorRoutes(dependencias.prestadorService, dependencias.propostaPrestadorService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
     await protegido.register(avaliacoesRoutes(dependencias.avaliacaoService));
   });

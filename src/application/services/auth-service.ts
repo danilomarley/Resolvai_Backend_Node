@@ -37,7 +37,7 @@ export class AuthService {
     };
   }
 
-  async register(request: RegisterRequest): Promise<UserResponse> {
+  async register(request: RegisterRequest, role: UserRole = UserRole.Cliente): Promise<UserResponse> {
     const email = Email.create(request.email);
 
     if (await this.userRepository.existsByEmail(email)) {
@@ -46,7 +46,7 @@ export class AuthService {
 
     const authUser = await this.supabaseAuthClient.signUp(email.value, request.password, request.name);
 
-    const user = User.register(authUser.id, request.name, email, UserRole.Cliente);
+    const user = User.register(authUser.id, request.name, email, role);
     await this.userRepository.add(user);
 
     return toUserResponse(user);

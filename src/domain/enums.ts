@@ -27,12 +27,13 @@ export type StatusPedido = (typeof StatusPedido)[keyof typeof StatusPedido];
 export const statusPedidos = Object.values(StatusPedido);
 
 /**
- * Persistido como texto na coluna propostas.status (enviada/visualizada/escolhida).
+ * Persistido como texto na coluna propostas.status (enviada/visualizada/escolhida/nao_escolhida).
  */
 export const StatusProposta = {
   Sent: 'Sent',
   Viewed: 'Viewed',
-  Chosen: 'Chosen'
+  Chosen: 'Chosen',
+  NotChosen: 'NotChosen'
 } as const;
 
 export type StatusProposta = (typeof StatusProposta)[keyof typeof StatusProposta];

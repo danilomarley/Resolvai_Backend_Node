@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { listaPropostasResponseSchema, listarPropostasQuerySchema, propostaDetalheResponseSchema } from '../../application/dtos/propostas.js';
-import { pedidoIdParamsSchema } from '../../application/dtos/pedidos.js';
+import { pedidoIdParamsSchema, pedidoResponseSchema } from '../../application/dtos/pedidos.js';
 import type { PropostaService } from '../../application/services/proposta-service.js';
 import { normalizarGuid } from '../guid.js';
 import { guidDaRota, semCache } from './util.js';
@@ -57,6 +57,28 @@ export function propostasRoutes(service: PropostaService) {
 
         semCache(reply);
         return service.getById(request.usuario, orderId, proposalId);
+      }
+    });
+
+    rotas.post('/api/v1/orders/:id/proposals/:proposalId/accept', {
+      schema: {
+        tags: ['Propostas'],
+        summary: 'Aceita uma proposta do pedido (Resolvai_Cliente#84).',
+        description:
+          'Marca a proposta como Chosen e as demais pendentes do pedido como NotChosen. O pedido continua Pending: ele só entra em andamento depois do pagamento. ' +
+          'Retorna 409 quando o pedido não está mais aberto, já tem uma proposta aceita ou a proposta não está mais disponível; 404 para pedido ou proposta inexistentes ou de outro usuário.',
+        params: propostaParamsSchema,
+        response: { 200: pedidoResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const orderId = normalizarGuid(request.params.id);
+        const proposalId = normalizarGuid(request.params.proposalId);
+        if (!orderId || !proposalId) {
+          return reply.callNotFound();
+        }
+
+        semCache(reply);
+        return service.aceitar(request.usuario, orderId, proposalId);
       }
     });
   };

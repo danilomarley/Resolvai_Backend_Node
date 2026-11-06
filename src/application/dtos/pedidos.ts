@@ -5,7 +5,7 @@ import { dataIso, obrigatorio, tamanho, textoObrigatorio, textoOpcional, url } f
 
 export const maxPageSize = 50;
 
-const inteiroDaQuery = (campo: string, min: number, max: number, padrao: number) =>
+export const inteiroDaQuery = (campo: string, min: number, max: number, padrao: number) =>
   z
     .string()
     .optional()
