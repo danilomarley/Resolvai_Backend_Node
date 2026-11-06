@@ -71,7 +71,9 @@ export interface ISupabaseAuthClient {
   signInWithPassword(email: string, password: string): Promise<SupabaseSession>;
   signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
   adminCreateUser(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
-  adminUpdatePassword(userId: string, password: string): Promise<void>;
+  requestPasswordRecovery(email: string): Promise<void>;
+  verifyPasswordRecovery(email: string, token: string): Promise<SupabaseSession>;
+  updateOwnPassword(accessToken: string, password: string): Promise<void>;
 }
 
 /**

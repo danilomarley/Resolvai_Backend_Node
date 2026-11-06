@@ -1,5 +1,5 @@
 import type { ISupabaseAuthClient, SupabaseAuthUser, SupabaseSession } from '../../application/contracts.js';
-import { ConflictException, UnauthorizedException } from '../../application/errors.js';
+import { ConflictException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
 import { DomainException } from '../../domain/errors.js';
 
 export interface SupabaseAuthOptions {
@@ -110,15 +110,40 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     return { id: body.id!.toLowerCase(), email: body.email ?? email };
   }
 
-  async adminUpdatePassword(userId: string, password: string): Promise<void> {
-    const response = await this.send(`auth/v1/admin/users/${encodeURIComponent(userId)}`, this.options.serviceRoleKey, { password }, 'PUT');
-    const payload = await response.text();
+  async requestPasswordRecovery(email: string): Promise<void> {
+    const response = await this.recoveryRequest('recover', { email });
+    // O contrato de solicitação não distingue conta ausente, bloqueio ou limite do provedor.
+    if (!response.ok && ![400, 404, 422, 429].includes(response.status)) throw recoveryUnavailable();
+  }
 
-    if (response.status === 422) {
-      throw new DomainException('A nova senha não atende às regras de segurança do Supabase Auth.');
-    }
+  async verifyPasswordRecovery(email: string, token: string): Promise<SupabaseSession> {
+    const response = await this.recoveryRequest('verify', { type: 'recovery', email, token });
+    if ([400, 401, 403, 404, 422, 429].includes(response.status)) throw invalidRecovery();
+    if (!response.ok) throw recoveryUnavailable();
+    const body = deserialize<TokenResponse>(await response.text());
+    if (!body) throw invalidRecovery();
+    const session = toSession(body);
+    if (session.expiresAtUtc.getTime() <= Date.now()) throw invalidRecovery();
+    return session;
+  }
 
-    ensureSuccess(response, payload, 'Falha ao redefinir a senha no Supabase Auth.');
+  async updateOwnPassword(accessToken: string, password: string): Promise<void> {
+    const response = await this.recoveryRequest('user', { password }, 'PUT', accessToken);
+    if ([401, 403].includes(response.status)) throw invalidRecovery();
+    if ([400, 422].includes(response.status)) throw new DomainException('A nova senha não atende às regras de segurança. Solicite outro código e tente novamente.');
+    if (!response.ok) throw recoveryUnavailable();
+    // Encerra as sessões de atualização/refresh. JWTs já emitidos expiram conforme a política do provedor.
+    const logout = await this.recoveryRequest('logout?scope=global', undefined, 'POST', accessToken);
+    if (!logout.ok && logout.status !== 401) throw recoveryUnavailable();
+  }
+
+  private async recoveryRequest(path: string, body: unknown, method = 'POST', token = this.options.anonKey): Promise<Response> {
+    try {
+      return await this.fetcher(new URL(`auth/v1/${path}`, this.baseUrl), {
+        method, headers: { apikey: this.options.anonKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15000)
+      });
+    } catch { throw recoveryUnavailable(); }
   }
 
   private send(path: string, key: string, body: unknown, method = 'POST'): Promise<Response> {
@@ -135,6 +160,9 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     });
   }
 }
+
+const invalidRecovery = () => new UnauthorizedException('Código inválido ou expirado.');
+const recoveryUnavailable = () => new ServicoIndisponivelException('Não foi possível processar a recuperação de senha. Tente novamente mais tarde.');
 
 function isConflict(response: Response, payload: string): boolean {
   return response.status === 422 || (response.status === 400 && payload.toLowerCase().includes('already'));

@@ -90,4 +90,4 @@ tests/                 Vitest
 
 Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md). Exemplos de requisição em [requests.http](requests.http). O que mudou em relação à API C# está em [docs/MIGRACAO.md](docs/MIGRACAO.md). O deploy no Render está em [docs/DEPLOY.md](docs/DEPLOY.md).
 
-A recuperação de senha segue o fluxo definido na #70: informa o e-mail e define a nova senha, sem confirmação por e-mail. Quem souber o e-mail de uma conta consegue trocar a senha dela; as rotas têm limite de tentativas por IP e por e-mail para reduzir abuso.
+A recuperação exige código enviado por e-mail pelo Supabase, validado com uso único antes de alterar a senha. Consulte [recuperação segura](docs/PASSWORD-RECOVERY.md) para o contrato, configuração do template e testes isolados. A solicitação não revela se a conta existe.

@@ -1,0 +1,15 @@
+# Recuperação com prova de posse
+
+A correção substitui o fluxo inseguro da #70. `POST /api/v1/auth/check-email` passa a iniciar recuperação oficial via Supabase `/recover`, com resposta genérica `{ message }` para contas existentes/ausentes. Não consulta existência no banco local. Limites por IP/e-mail valem para ambos os casos, além dos limites do provedor.
+
+`POST /api/v1/auth/reset-password` exige `{ email, token, newPassword }`. token é o OTP de 6 dígitos entregue ao titular por e-mail; nova senha de 8 a 128 caracteres. O servidor verifica e consome o OTP usando `/verify` com type=recovery, confirma UUID/e-mail/perfil ativo e usa a sessão verificada em `PUT /user`. Não aceita somente e-mail/senha, não aceita um UUID alvo e não usa chave administrativa para a troca. Sessão e refresh token de recuperação não são entregues ao frontend. O logout global revoga sessões de refresh; JWTs já emitidos conservam sua expiração normal.
+
+Ausência/formato inválido: 400; código inválido/expirado/reutilizado ou de outra conta: 401; limite local: 429; indisponibilidade externa: 503, sem conteúdo bruto do provedor em erros/logs. O OTP é consumido antes da alteração: falha posterior exige novo código, sem reabrir reutilização.
+
+Implantação coordenada: configurar o template **Reset Password** no Supabase com `Seu código de recuperação é {{ .Token }}` (expiração e tamanho definidos pelo Supabase; esta interface exige 6 dígitos). Configurar SMTP confiável e revisar limites/expiração no ambiente apropriado. Publicar API e frontend correspondentes; o frontend anterior não consegue redefinir sem OTP. Nenhuma configuração ou dado de produção foi alterado nesta entrega. Não reverter ao endpoint sem prova de posse.
+
+Mecanismos oficiais: [Supabase Auth recover/verify/user](https://github.com/supabase/auth#endpoints) e [variáveis de templates](https://supabase.com/docs/guides/auth/auth-email-templates). O código não gera ou persiste OTPs próprios. Os limites em memória são por instância; para múltiplas réplicas, adotar um limitador compartilhado no gateway/serviço. Não se afirma eliminar diferenças temporais do provedor nem revogar JWTs já emitidos instantaneamente.
+
+`npm run typecheck`, `npm test`, `npm run build` cobrem serviço, contrato HTTP e cliente Supabase. Testes reais separados: `docker compose -f tests/live/compose.yml up -d --wait`, `node --test tests/live/password.live.mjs`, `docker compose -f tests/live/compose.yml down`. PostgreSQL tmpfs, GoTrue real e Mailpit, somente localhost e credenciais sintéticas. A fixture de expiração altera recovery_sent_at apenas no Auth local v2.197.0 após conferir marcador/nome do banco. Nunca executar esses scripts com banco de produção.
+
+`node tests/live/reproduce.mjs DIRETORIO_BASELINE` comprova a troca e o login não autorizado na cópia isolada da versão anterior; não aceita URL externa. Os testes corrigidos cobrem prova válida, ausente, inválida, expirada, reutilizada, outra conta e senhas nova/antiga. O workflow de integração do frontend pode executar esta revisão candidata sem aprovar ou substituir os checks do upstream que exigem mantenedor.

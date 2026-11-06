@@ -21,6 +21,7 @@ import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
 import type { StatusPedido } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
+import { UnauthorizedException } from '../src/application/errors.js';
 
 export const usuario = (id?: string, extra: Partial<CurrentUser> = {}): CurrentUser => ({
   isAuthenticated: true,
@@ -205,8 +206,21 @@ export class FakeSupabase implements ISupabaseAuthClient {
   }
 
   readonly senhasAlteradas: { userId: string; password: string }[] = [];
-  async adminUpdatePassword(userId: string, password: string) {
+  readonly recuperacoes: string[] = [];
+  recoverySession?: SupabaseSession;
+  async requestPasswordRecovery(email: string) {
     if (this.erro) throw this.erro;
-    this.senhasAlteradas.push({ userId, password });
+    this.recuperacoes.push(email);
+  }
+  async verifyPasswordRecovery(_email: string, token: string) {
+    if (this.erro) throw this.erro;
+    if (!this.recoverySession || token !== '123456') throw new UnauthorizedException('Código inválido ou expirado.');
+    const session = this.recoverySession;
+    this.recoverySession = undefined;
+    return session;
+  }
+  async updateOwnPassword(_accessToken: string, password: string) {
+    if (this.erro) throw this.erro;
+    this.senhasAlteradas.push({ userId: 'sessao-verificada', password });
   }
 }

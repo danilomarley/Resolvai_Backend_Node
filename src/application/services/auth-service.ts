@@ -4,7 +4,7 @@ import { User } from '../../domain/user.js';
 import type { ISupabaseAuthClient, IUserRepository } from '../contracts.js';
 import type { LoginRequest, LoginResponse, RedefinirSenhaRequest, RegisterRequest, VerificarEmailRequest } from '../dtos/auth.js';
 import type { UserResponse } from '../dtos/users.js';
-import { ConflictException, NotFoundException, UnauthorizedException } from '../errors.js';
+import { ConflictException, UnauthorizedException } from '../errors.js';
 import { toUserResponse } from '../mappings/user-mapper.js';
 
 export class AuthService {
@@ -52,34 +52,23 @@ export class AuthService {
     return toUserResponse(user);
   }
 
-  /**
-   * Recuperação de senha, etapa 1: confirma que existe conta para o e-mail.
-   */
+  /** O provedor envia a prova por e-mail; não consultamos existência no banco local. */
   async verificarEmail(request: VerificarEmailRequest): Promise<void> {
-    await this.usuarioDoEmail(request.email);
+    await this.supabaseAuthClient.requestPasswordRecovery(Email.create(request.email).value);
   }
 
   /**
-   * Recuperação de senha, etapa 2: grava a nova senha no Supabase Auth.
-   * Fluxo definido na issue #70: não há confirmação por e-mail antes da troca.
+   * O OTP é verificado e consumido pelo Supabase, com expiração e uso único.
+   * A troca usa a sessão verificada, nunca a chave administrativa ou um id do cliente.
    */
   async redefinirSenha(request: RedefinirSenhaRequest): Promise<void> {
-    const user = await this.usuarioDoEmail(request.email);
-    await this.supabaseAuthClient.adminUpdatePassword(user.id, request.newPassword);
-  }
-
-  private async usuarioDoEmail(valor: string) {
-    const email = Email.tryCreate(valor);
-    const user = email ? await this.userRepository.getByEmail(email) : null;
-
-    if (!user) {
-      throw new NotFoundException('E-mail', valor.trim().toLowerCase());
+    if (!/^\d{6}$/.test(request.token ?? '')) throw new UnauthorizedException('Código inválido ou expirado.');
+    const email = Email.create(request.email).value;
+    const session = await this.supabaseAuthClient.verifyPasswordRecovery(email, request.token);
+    const user = await this.userRepository.getById(session.user.id);
+    if (!user?.isActive || user.email.value !== email || session.user.email.toLowerCase() !== email) {
+      throw new UnauthorizedException('Código inválido ou expirado.');
     }
-
-    if (!user.isActive) {
-      throw new UnauthorizedException('Usuário inativo.');
-    }
-
-    return user;
+    await this.supabaseAuthClient.updateOwnPassword(session.accessToken, request.newPassword);
   }
 }

@@ -386,30 +386,35 @@ describe('Integração com PostgreSQL', () => {
     const post = (url: string, payload: unknown, ip = '10.0.0.1') =>
       app.inject({ method: 'POST', url, payload: payload as object, remoteAddress: ip });
 
-    it('confirma e-mail existente e recusa inexistente', async () => {
+    it('solicita código sem revelar existência do e-mail', async () => {
       const existe = await post('/api/v1/auth/check-email', { email: 'MARIA@teste.com' });
       expect(existe.statusCode).toBe(200);
-      expect(existe.json()).toEqual({ email: 'maria@teste.com' });
 
       const naoExiste = await post('/api/v1/auth/check-email', { email: 'ninguem@teste.com' });
-      expect(naoExiste.statusCode).toBe(404);
+      expect(naoExiste.statusCode).toBe(200);
+      expect(naoExiste.json()).toEqual(existe.json());
+      expect(supabase.recuperacoes).toContain('maria@teste.com');
     });
 
     it('troca a senha no Supabase Auth do usuário certo e exige 8 caracteres', async () => {
       const curta = await post('/api/v1/auth/reset-password', { email: 'maria@teste.com', newPassword: '123' }, '10.0.0.2');
       expect(curta.statusCode).toBe(400);
 
-      const resposta = await post('/api/v1/auth/reset-password', { email: 'maria@teste.com', newPassword: 'NovaSenha123' }, '10.0.0.2');
+      const ausente = await post('/api/v1/auth/reset-password', { email: 'maria@teste.com', newPassword: 'NovaSenha123' }, '10.0.0.2');
+      expect(ausente.statusCode).toBe(400);
+      supabase.recoverySession = { accessToken: 'sessao-recuperacao', tokenType: 'bearer', refreshToken: null, expiresAtUtc: new Date(Date.now() + 60000), user: { id: ids.cliente, email: 'maria@teste.com' } };
+      const resposta = await post('/api/v1/auth/reset-password', { email: 'maria@teste.com', token: '123456', newPassword: 'NovaSenha123' }, '10.0.0.2');
       expect(resposta.statusCode).toBe(200);
-      expect(supabase.senhasAlteradas.at(-1)).toEqual({ userId: ids.cliente, password: 'NovaSenha123' });
+      expect(supabase.senhasAlteradas.at(-1)).toEqual({ userId: 'sessao-verificada', password: 'NovaSenha123' });
+      expect((await post('/api/v1/auth/reset-password', { email: 'maria@teste.com', token: '123456', newPassword: 'OutraSenha123' }, '10.0.0.2')).statusCode).toBe(401);
     });
 
     it('limita tentativas por e-mail', async () => {
       const ultimas = [];
       for (let i = 0; i < 6; i++) {
-        ultimas.push(await post('/api/v1/auth/reset-password', { email: 'pedro@teste.com', newPassword: 'SenhaNova123' }, `10.0.1.${i}`));
+        ultimas.push(await post('/api/v1/auth/reset-password', { email: 'pedro@teste.com', token: '000000', newPassword: 'SenhaNova123' }, `10.0.1.${i}`));
       }
-      expect(ultimas.slice(0, 5).every(r => r.statusCode === 200)).toBe(true);
+      expect(ultimas.slice(0, 5).every(r => r.statusCode === 401)).toBe(true);
       expect(ultimas[5]!.statusCode).toBe(429);
     });
   });
