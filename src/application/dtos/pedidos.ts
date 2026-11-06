@@ -105,15 +105,29 @@ export const fotoPedidoResponseSchema = z.object({
 
 export type FotoPedidoResponse = z.infer<typeof fotoPedidoResponseSchema>;
 
+/**
+ * Média (uma casa decimal) e quantidade das avaliações que o prestador recebeu de clientes.
+ * average é null enquanto ele não tem nenhuma.
+ */
+export const avaliacaoDoPrestadorSchema = z.object({
+  average: z.number().min(1).max(5).nullable(),
+  count: z.number().int().nonnegative()
+});
+
+export type AvaliacaoDoPrestador = z.infer<typeof avaliacaoDoPrestadorSchema>;
+
 export const propostaResponseSchema = z.object({
   id: z.guid(),
   providerId: z.guid(),
   providerName: z.string(),
   status: z.enum(statusPropostas),
   value: z.number(),
-  deadline: z.string().optional(),
+  deadline: z.string().optional().describe('Prazo em texto livre, para exibição.'),
+  deadlineDays: z.number().int().positive().optional().describe('Prazo em dias; é o que a ordenação por prazo usa.'),
   description: z.string().optional(),
-  warranty: z.string().optional()
+  warranty: z.string().optional(),
+  createdAt: dataIso.describe('Quando a proposta foi enviada.'),
+  providerRating: avaliacaoDoPrestadorSchema
 });
 
 export type PropostaResponse = z.infer<typeof propostaResponseSchema>;

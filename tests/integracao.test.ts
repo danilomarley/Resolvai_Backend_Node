@@ -18,12 +18,14 @@ import { AvaliacaoService } from '../src/application/services/avaliacao-service.
 import { AvaliacaoRepository } from '../src/infrastructure/repositories/avaliacao-repository.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
+import { PropostaService } from '../src/application/services/proposta-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { createDatabase, type Database } from '../src/infrastructure/database.js';
 import { ContatoRepository } from '../src/infrastructure/repositories/contato-repository.js';
 import { EnderecoRepository } from '../src/infrastructure/repositories/endereco-repository.js';
 import { PedidoQueries } from '../src/infrastructure/repositories/pedido-queries.js';
 import { PedidoRepository } from '../src/infrastructure/repositories/pedido-repository.js';
+import { PropostaRepository } from '../src/infrastructure/repositories/proposta-repository.js';
 import { UserRepository } from '../src/infrastructure/repositories/user-repository.js';
 import { FakeArmazenamento, FakeAssistente, FakeSupabase } from './fakes.js';
 
@@ -138,6 +140,7 @@ describe('Integração com PostgreSQL', () => {
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
+        propostaService: new PropostaService(new PropostaRepository(database)),
         fotoPedidoService: new FotoPedidoService(armazenamento, users),
         assistentePedidoService: new AssistentePedidoService(assistente),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
@@ -502,6 +505,153 @@ describe('Integração com PostgreSQL', () => {
       assistente.erro = undefined;
       expect(resposta.statusCode).toBe(503);
       expect(resposta.json().detail).toBe('O assistente de pedidos não está configurado neste servidor.');
+    });
+  });
+
+  describe('propostas do pedido (#83)', () => {
+    const p = {
+      cliente: '60000000-0000-4000-8000-000000000001',
+      outro: '60000000-0000-4000-8000-000000000002',
+      ana: '60000000-0000-4000-8000-0000000000a1',
+      bruno: '60000000-0000-4000-8000-0000000000b2',
+      carla: '60000000-0000-4000-8000-0000000000c3'
+    };
+    const pedidoA = '61000000-0000-4000-8000-000000000001';
+    const pedidoVazio = '61000000-0000-4000-8000-000000000002';
+    const proposta = { ana: '62000000-0000-4000-8000-0000000000a1', bruno: '62000000-0000-4000-8000-0000000000b2', carla: '62000000-0000-4000-8000-0000000000c3' };
+    const url = (sufixo = '') => `/api/v1/orders/${pedidoA}/proposals${sufixo}`;
+    const nomes = (corpo: { providerName: string }[]) => corpo.map(item => item.providerName);
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${p.cliente}', 'Cliente Propostas', 'cp@teste.com', 'Cliente', '70000000011', now()),
+          ('${p.outro}', 'Outro Cliente', 'oc@teste.com', 'Cliente', '70000000022', now()),
+          ('${p.ana}', 'Ana Eletricista', 'ana.e@teste.com', 'Prestador', null, '2026-01-10T12:00:00Z'),
+          ('${p.bruno}', 'Bruno Pedreiro', 'bruno.p@teste.com', 'Prestador', null, '2026-02-01T12:00:00Z'),
+          ('${p.carla}', 'Carla Pintora', 'carla.p@teste.com', 'Prestador', null, '2026-03-01T12:00:00Z');
+
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${pedidoA}', '${p.cliente}', '{"titulo":"Reforma"}', 'aberto'),
+          ('${pedidoVazio}', '${p.cliente}', '{"titulo":"Sem propostas"}', 'aberto'),
+          -- serviços já concluídos pelo prestador escolhido: Ana 2 (notas 5 e 4), Bruno 1 (nota 3)
+          ('61000000-0000-4000-8000-0000000000a1', '${p.outro}', '{"titulo":"c1"}', 'concluido'),
+          ('61000000-0000-4000-8000-0000000000a2', '${p.outro}', '{"titulo":"c2"}', 'concluido'),
+          ('61000000-0000-4000-8000-0000000000b1', '${p.outro}', '{"titulo":"c3"}', 'concluido');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias, descricao, garantia, data_criacao) values
+          ('${proposta.ana}', '${pedidoA}', '${p.ana}', 'enviada', 900.00, '10 dias', 10, 'Completa', '1 ano', '2026-10-01T10:00:00Z'),
+          ('${proposta.bruno}', '${pedidoA}', '${p.bruno}', 'enviada', 500.50, 'três dias', 3, null, null, '2026-10-02T10:00:00Z'),
+          ('${proposta.carla}', '${pedidoA}', '${p.carla}', 'enviada', 700.00, 'a combinar', null, null, '90 dias', '2026-10-03T10:00:00Z'),
+          ('62000000-0000-4000-8000-0000000001a1', '61000000-0000-4000-8000-0000000000a1', '${p.ana}', 'escolhida', 100, null, null, null, null, now()),
+          ('62000000-0000-4000-8000-0000000001a2', '61000000-0000-4000-8000-0000000000a2', '${p.ana}', 'escolhida', 100, null, null, null, null, now()),
+          ('62000000-0000-4000-8000-0000000001b1', '61000000-0000-4000-8000-0000000000b1', '${p.bruno}', 'escolhida', 100, null, null, null, null, now());
+
+        insert into avaliacoes (id_pedido, id_cliente, id_prestador, nota) values
+          ('61000000-0000-4000-8000-0000000000a1', '${p.outro}', '${p.ana}', 5),
+          ('61000000-0000-4000-8000-0000000000a2', '${p.outro}', '${p.ana}', 4),
+          ('61000000-0000-4000-8000-0000000000b1', '${p.outro}', '${p.bruno}', 3);
+      `);
+    });
+
+    it('lista por preço crescente (padrão) com data de envio, prazo e avaliação do prestador', async () => {
+      const resposta = await chamar('GET', url(), p.cliente);
+      expect(resposta.statusCode).toBe(200);
+      const corpo = resposta.json();
+      expect(nomes(corpo)).toEqual(['Bruno Pedreiro', 'Carla Pintora', 'Ana Eletricista']);
+      expect(corpo[2]).toEqual({
+        id: proposta.ana,
+        providerId: p.ana,
+        providerName: 'Ana Eletricista',
+        status: 'Sent',
+        value: 900,
+        deadline: '10 dias',
+        deadlineDays: 10,
+        description: 'Completa',
+        warranty: '1 ano',
+        createdAt: '2026-10-01T10:00:00.000Z',
+        providerRating: { average: 4.5, count: 2 }
+      });
+      // Sem avaliação: média nula e contagem zero; campos opcionais ausentes são omitidos.
+      expect(corpo[1].providerRating).toEqual({ average: null, count: 0 });
+      expect(corpo[1]).not.toHaveProperty('deadlineDays');
+      expect(corpo[0].providerRating).toEqual({ average: 3, count: 1 });
+    });
+
+    it('ordena por preço, prazo e avaliação nas duas direções, deixando os sem dado por último', async () => {
+      const ordem = async (query: string) => nomes((await chamar('GET', url(query), p.cliente)).json());
+      expect(await ordem('?sort=price&direction=desc')).toEqual(['Ana Eletricista', 'Carla Pintora', 'Bruno Pedreiro']);
+      expect(await ordem('?sort=deadline')).toEqual(['Bruno Pedreiro', 'Ana Eletricista', 'Carla Pintora']);
+      expect(await ordem('?sort=deadline&direction=desc')).toEqual(['Ana Eletricista', 'Bruno Pedreiro', 'Carla Pintora']);
+      expect(await ordem('?sort=rating')).toEqual(['Ana Eletricista', 'Bruno Pedreiro', 'Carla Pintora']);
+      expect(await ordem('?sort=rating&direction=asc')).toEqual(['Bruno Pedreiro', 'Ana Eletricista', 'Carla Pintora']);
+      expect(await ordem('?sort=RATING&direction=DESC')).toEqual(['Ana Eletricista', 'Bruno Pedreiro', 'Carla Pintora']);
+    });
+
+    it('ordenação inválida responde 400; pedido sem propostas responde lista vazia', async () => {
+      expect((await chamar('GET', url('?sort=nome'), p.cliente)).statusCode).toBe(400);
+      expect((await chamar('GET', url('?direction=cima'), p.cliente)).statusCode).toBe(400);
+      const vazio = await chamar('GET', `/api/v1/orders/${pedidoVazio}/proposals`, p.cliente);
+      expect(vazio.statusCode).toBe(200);
+      expect(vazio.json()).toEqual([]);
+    });
+
+    it('só o dono vê: outro cliente e pedido inexistente respondem 404', async () => {
+      expect((await chamar('GET', url(), p.outro)).statusCode).toBe(404);
+      expect((await chamar('GET', url(`/${proposta.ana}`), p.outro)).statusCode).toBe(404);
+      expect((await chamar('GET', `/api/v1/orders/${randomUUID()}/proposals`, p.cliente)).statusCode).toBe(404);
+    });
+
+    it('a listagem e o detalhe do pedido não marcam nada como visualizada', async () => {
+      await chamar('GET', url(), p.cliente);
+      await chamar('GET', `/api/v1/orders/${pedidoA}`, p.cliente);
+      const status = (await pglite.query<{ status: string }>(`select status from propostas where id_pedido = '${pedidoA}'`)).rows.map(r => r.status);
+      expect(status).toEqual(['enviada', 'enviada', 'enviada']);
+    });
+
+    it('detalhe traz o resumo do prestador e marca como visualizada, alimentando a Home', async () => {
+      const antes = (await chamar('GET', '/api/v1/home/summary', p.cliente)).json().proposals;
+      expect(antes).toEqual({ total: 3, awaitingDecision: 3, unviewed: 3 });
+
+      const resposta = await chamar('GET', url(`/${proposta.ana}`), p.cliente);
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toMatchObject({
+        id: proposta.ana,
+        status: 'Viewed',
+        providerRating: { average: 4.5, count: 2 },
+        providerProfile: { memberSince: '2026-01-10T12:00:00.000Z', completedServices: 2 }
+      });
+      expect((await pglite.query<{ status: string }>(`select status from propostas where id = '${proposta.ana}'`)).rows[0]!.status).toBe('visualizada');
+
+      // Abrir de novo não muda nada, e a Home passa a mostrar uma proposta a menos para conferir.
+      expect((await chamar('GET', url(`/${proposta.ana}`), p.cliente)).json().status).toBe('Viewed');
+      const depois = (await chamar('GET', '/api/v1/home/summary', p.cliente)).json().proposals;
+      expect(depois).toEqual({ total: 3, awaitingDecision: 3, unviewed: 2 });
+    });
+
+    it('proposta de outro pedido ou inexistente responde 404 e o resumo conta só serviços concluídos', async () => {
+      expect((await chamar('GET', `/api/v1/orders/${pedidoVazio}/proposals/${proposta.bruno}`, p.cliente)).statusCode).toBe(404);
+      expect((await chamar('GET', url(`/${randomUUID()}`), p.cliente)).statusCode).toBe(404);
+      const bruno = (await chamar('GET', url(`/${proposta.bruno}`), p.cliente)).json();
+      expect(bruno.providerProfile.completedServices).toBe(1);
+      const carla = (await chamar('GET', url(`/${proposta.carla}`), p.cliente)).json();
+      expect(carla.providerProfile.completedServices).toBe(0);
+    });
+
+    it('o detalhe do pedido passa a incluir data de envio, prazo numérico e avaliação nas propostas', async () => {
+      const corpo = (await chamar('GET', `/api/v1/orders/${pedidoA}`, p.cliente)).json();
+      expect(corpo.proposals[0]).toMatchObject({ providerName: 'Bruno Pedreiro', createdAt: '2026-10-02T10:00:00.000Z', deadlineDays: 3, providerRating: { average: 3, count: 1 } });
+    });
+
+    it('a migração 014 pode ser reaplicada sem erro e sem perder dados', async () => {
+      const script = readFileSync(join(import.meta.dirname, '..', 'db', 'scripts', '014_alter_propostas_data_e_prazo.sql'), 'utf8');
+      await pglite.exec(script);
+      const [linha] = (await pglite.query<{ prazo_dias: number }>(`select prazo_dias from propostas where id = '${proposta.ana}'`)).rows;
+      expect(linha!.prazo_dias).toBe(10);
+    });
+
+    it('a migração 014 rejeita prazo numérico que não seja positivo', async () => {
+      await expect(pglite.exec(`update propostas set prazo_dias = 0 where id = '${proposta.ana}'`)).rejects.toThrow(/ck_propostas_prazo_dias/);
     });
   });
 

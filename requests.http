@@ -131,6 +131,14 @@ Authorization: Bearer {{token}}
 GET {{host}}/api/v1/orders/{{orderId}}
 Authorization: Bearer {{token}}
 
+### Propostas recebidas pelo pedido (sort: price, deadline ou rating; direction: asc ou desc)
+GET {{host}}/api/v1/orders/{{orderId}}/proposals?sort=rating
+Authorization: Bearer {{token}}
+
+### Detalhe da proposta, com o resumo do prestador (marca como visualizada)
+GET {{host}}/api/v1/orders/{{orderId}}/proposals/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{token}}
+
 ### Resumo da Home (dados dos cards e pedidos recentes)
 GET {{host}}/api/v1/home/summary
 Authorization: Bearer {{token}}

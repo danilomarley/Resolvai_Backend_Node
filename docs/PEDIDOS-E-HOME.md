@@ -1,6 +1,6 @@
 # Pedidos e resumo da Home
 
-As rotas leem as tabelas `public.pedidos`, `public.propostas` e `public.fotos_pedido` (scripts 006 a 008) e `public.users` (nome do prestador). Antes de usá-las, aplique os scripts de `db/scripts` em ordem numérica, incluindo `011_create_ix_pedidos_cliente_criacao.sql` (índice da listagem).
+As rotas leem as tabelas `public.pedidos`, `public.propostas` e `public.fotos_pedido` (scripts 006 a 008), `public.users` (nome do prestador) e `public.avaliacoes` (nota média do prestador). Antes de usá-las, aplique os scripts de `db/scripts` em ordem numérica, incluindo `011_create_ix_pedidos_cliente_criacao.sql` (índice da listagem) e `014_alter_propostas_data_e_prazo.sql` (data de envio e prazo numérico das propostas). **Aplique o 014 no Supabase antes de publicar esta versão da API**: ela passa a ler `propostas.data_criacao` e `propostas.prazo_dias`.
 
 O antigo `003_create_orders.sql` foi removido: as rotas não usam mais `public.orders`. Se essa tabela foi criada em algum banco, ela pode ser descartada pelo responsável depois de conferir que não há dados a migrar.
 
@@ -25,6 +25,8 @@ Os nomes seguem a API C# para facilitar a comparação. Os campos do JSON e os v
 | GET | `/api/v1/orders?status=&page=1&pageSize=10` | Lista paginada dos pedidos do usuário (Seus Pedidos) | Resolvai_Cliente#49 |
 | GET | `/api/v1/orders/{id}` | Detalhe de um pedido com escopo, fotos e propostas | Resolvai_Cliente#49 |
 | GET | `/api/v1/home/summary` | Dados dos cards e os 5 pedidos mais recentes | Resolvai_Cliente#50 |
+| GET | `/api/v1/orders/{id}/proposals?sort=&direction=` | Propostas recebidas pelo pedido, ordenáveis | Resolvai_Cliente#83 |
+| GET | `/api/v1/orders/{id}/proposals/{proposalId}` | Detalhe da proposta com o resumo do prestador | Resolvai_Cliente#83 |
 
 Todas exigem `Authorization: Bearer <accessToken>` obtido no login. Todos os papéis, inclusive Admin, consultam apenas os pedidos em que são o cliente (`pedidos.id_cliente`). O identificador do usuário vem do token, nunca de parâmetros enviados pelo cliente. Usuários inativos ou tokens inválidos recebem 401. As respostas HTTP não devem ser armazenadas em cache (`Cache-Control: no-store`). Campos nulos são omitidos, conforme a configuração geral da API.
 
@@ -147,9 +149,56 @@ Retorna os campos da listagem, exceto os dois de propostas, e acrescenta:
 | `location` | `escopo.localizacao` |
 | `scope` | `escopo` completo, como JSON |
 | `photos[]` | `fotos_pedido`: `id`, `url` (valor da coluna `foto`, URL ou caminho no storage), `description` |
-| `proposals[]` | `propostas` + `users`: `id`, `providerId`, `providerName`, `status`, `value`, `deadline`, `description`, `warranty` |
+| `proposals[]` | `propostas` + `users` + `avaliacoes`: `id`, `providerId`, `providerName`, `status`, `value`, `deadline`, `deadlineDays`, `description`, `warranty`, `createdAt`, `providerRating` (ver abaixo) |
 
-As propostas vêm com a escolhida primeiro, depois por valor crescente. Consultar o detalhe não marca propostas como visualizadas. Pedido inexistente ou de outro usuário retorna 404, assim como um identificador que não seja UUID.
+As propostas vêm com a escolhida primeiro, depois por valor crescente. Consultar o detalhe do pedido não marca propostas como visualizadas (quem marca é o detalhe da proposta, abaixo). Pedido inexistente ou de outro usuário retorna 404, assim como um identificador que não seja UUID.
+
+## Propostas do pedido (#83)
+
+Só o cliente dono do pedido enxerga as propostas. Pedido inexistente ou de outro cliente retorna 404, como nas demais rotas de pedidos, e o mesmo vale para proposta que não pertence ao pedido.
+
+### Dados de cada proposta
+
+| Campo | Origem / regra |
+| --- | --- |
+| `value`, `description`, `warranty` | `propostas.valor`, `descricao`, `garantia` |
+| `deadline` | `propostas.prazo`, texto livre para exibição (por exemplo "5 dias úteis") |
+| `deadlineDays` | `propostas.prazo_dias`, prazo numérico em dias. É o que a ordenação por prazo usa; ausente quando o prestador não informou |
+| `createdAt` | `propostas.data_criacao`, quando a proposta foi enviada |
+| `providerRating` | `{ average, count }`: média (uma casa decimal) e quantidade das avaliações que o prestador recebeu de clientes (`avaliacoes.nota`). `average` é `null` e `count` é 0 enquanto não houver nenhuma |
+
+### GET /api/v1/orders/{id}/proposals
+
+| Parâmetro | Padrão | Regra |
+| --- | --- | --- |
+| `sort` | `price` | `price`, `deadline` ou `rating`, sem diferenciar maiúsculas |
+| `direction` | `asc` em `price` e `deadline`; `desc` em `rating` | `asc` ou `desc` |
+
+Valores inválidos retornam 400. Propostas sem `deadlineDays` e prestadores sem avaliação ficam por último nas duas direções; empates são desfeitos por valor e `id`. Um pedido sem propostas devolve `[]`. A resposta é uma lista simples, sem paginação.
+
+### GET /api/v1/orders/{id}/proposals/{proposalId}
+
+Devolve os campos da proposta e `providerProfile`:
+
+```json
+{
+  "id": "62000000-0000-4000-8000-0000000000a1",
+  "providerId": "60000000-0000-4000-8000-0000000000a1",
+  "providerName": "Ana Eletricista",
+  "status": "Viewed",
+  "value": 900,
+  "deadline": "10 dias",
+  "deadlineDays": 10,
+  "warranty": "1 ano",
+  "createdAt": "2026-10-01T10:00:00.000Z",
+  "providerRating": { "average": 4.5, "count": 2 },
+  "providerProfile": { "memberSince": "2026-01-10T12:00:00.000Z", "completedServices": 2 }
+}
+```
+
+`memberSince` vem de `users.created_at`. `completedServices` conta os pedidos concluídos em que o prestador foi o escolhido.
+
+**Efeito colateral:** abrir o detalhe de uma proposta `Sent` a marca como `Viewed` (`visualizada` no banco) e a resposta já traz o status novo. Isso alimenta `proposals.unviewed` da Home. A listagem e `GET /api/v1/orders/{id}` não marcam nada.
 
 ## GET /api/v1/home/summary
 
@@ -185,7 +234,6 @@ Mantém o contrato anterior (`orders.total/pending/inProgress/completed/cancelle
 
 Cada item de `recentOrders` tem o mesmo formato dos itens de `GET /api/v1/orders`, e a lista é limitada a 5. Os totais consideram todos os pedidos do usuário, independentemente desse limite. Sem pedidos, todos os contadores são zero e a lista vem vazia.
 
-O card "Sua avaliação" do protótipo não tem fonte de dados: não há tabela de avaliações.
 
 ## Consultas
 

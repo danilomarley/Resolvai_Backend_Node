@@ -10,6 +10,7 @@ import { AuthService } from '../src/application/services/auth-service.js';
 import { AvaliacaoService } from '../src/application/services/avaliacao-service.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
+import { PropostaService } from '../src/application/services/proposta-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { Email } from '../src/domain/email.js';
 import { UserRole } from '../src/domain/enums.js';
@@ -20,10 +21,12 @@ import {
   FakeContatos,
   FakeEnderecos,
   FakePedidoRepository,
+  FakePropostaRepository,
   FakeQueries,
   FakeSupabase,
   FakeUsers,
-  pedidoDeTeste
+  pedidoDeTeste,
+  propostaDeTeste
 } from './fakes.js';
 
 const issuer = 'https://projeto-teste.supabase.co/auth/v1';
@@ -44,6 +47,7 @@ describe('API HTTP', () => {
   let app: FastifyInstance;
   let users: FakeUsers;
   let queries: FakeQueries;
+  let propostas: FakePropostaRepository;
   let supabase: FakeSupabase;
   const clienteId = randomUUID();
   const adminId = randomUUID();
@@ -51,6 +55,7 @@ describe('API HTTP', () => {
   beforeAll(async () => {
     users = new FakeUsers();
     queries = new FakeQueries();
+    propostas = new FakePropostaRepository();
     supabase = new FakeSupabase();
     app = await buildApp({
       dependencias: {
@@ -59,6 +64,7 @@ describe('API HTTP', () => {
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
+        propostaService: new PropostaService(propostas),
         fotoPedidoService: new FotoPedidoService(new FakeArmazenamento(), users),
         assistentePedidoService: new AssistentePedidoService(new FakeAssistente()),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
@@ -75,6 +81,11 @@ describe('API HTTP', () => {
     void users.add(cliente);
     void users.add(User.register(adminId, 'Admin', Email.create('admin@teste.com'), UserRole.Admin));
     queries.pedido = null;
+    propostas.propostas = [];
+    propostas.detalhe = null;
+    propostas.markResult = true;
+    propostas.marked = 0;
+    propostas.calls = 0;
     supabase.erro = undefined;
   });
 
@@ -281,6 +292,80 @@ describe('API HTTP', () => {
       expect(doc.paths['/api/v1/orders'].get.security).toEqual([{ Bearer: [] }]);
       expect(doc.paths['/api/v1/auth/login'].post.security).toBeUndefined();
       expect((await app.inject({ method: 'GET', url: '/swagger/' })).statusCode).toBe(200);
+    });
+  });
+  describe('propostas do pedido (#83)', () => {
+    const pedidoId = randomUUID();
+    const propostaId = randomUUID();
+
+    it('exige autenticação', async () => {
+      expect((await get(`/api/v1/orders/${pedidoId}/proposals`)).statusCode).toBe(401);
+      expect((await get(`/api/v1/orders/${pedidoId}/proposals/${propostaId}`)).statusCode).toBe(401);
+    });
+
+    it('lista com os padrões do contrato (preço crescente) e sem cache', async () => {
+      propostas.propostas = [propostaDeTeste(propostaId, { value: 900, deadlineDays: 5, providerRating: { average: 4.5, count: 2 } })];
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals`, clienteId);
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.headers['cache-control']).toBe('no-store,no-cache');
+      expect(propostas.lastList).toEqual({ orderId: pedidoId, customerId: clienteId, sort: 'price', direction: 'asc' });
+      expect(resposta.json()).toEqual([
+        expect.objectContaining({ id: propostaId, value: 900, deadlineDays: 5, providerRating: { average: 4.5, count: 2 }, createdAt: expect.any(String) })
+      ]);
+      expect(resposta.json()[0]).not.toHaveProperty('description');
+    });
+
+    it('repassa sort e direction sem diferenciar maiúsculas; rating começa pelo melhor', async () => {
+      await get(`/api/v1/orders/${pedidoId}/proposals?sort=DEADLINE&direction=Desc`, clienteId);
+      expect(propostas.lastList).toMatchObject({ sort: 'deadline', direction: 'desc' });
+      await get(`/api/v1/orders/${pedidoId}/proposals?sort=rating`, clienteId);
+      expect(propostas.lastList).toMatchObject({ sort: 'rating', direction: 'desc' });
+    });
+
+    it('ordenação inválida responde 400 no formato do ModelState, sem consultar', async () => {
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals?sort=nome&direction=lado`, clienteId);
+      expect(resposta.statusCode).toBe(400);
+      expect(Object.keys(resposta.json().errors).sort()).toEqual(['Direction', 'Sort']);
+      expect(propostas.calls).toBe(0);
+    });
+
+    it('pedido inexistente ou de outro cliente responde 404', async () => {
+      propostas.propostas = null;
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals`, clienteId);
+      expect(resposta.statusCode).toBe(404);
+      expect(resposta.json()).toMatchObject({ detail: `Pedido '${pedidoId}' não foi encontrado.`, instance: `GET /api/v1/orders/${pedidoId}/proposals` });
+    });
+
+    it('ids fora do formato Guid respondem 404 sem consultar', async () => {
+      expect((await get('/api/v1/orders/abc/proposals', clienteId)).statusCode).toBe(404);
+      expect((await get(`/api/v1/orders/${pedidoId}/proposals/abc`, clienteId)).statusCode).toBe(404);
+      expect((await get(`/api/v1/orders/abc/proposals/${propostaId}`, clienteId)).statusCode).toBe(404);
+      expect(propostas.calls).toBe(0);
+    });
+
+    it('detalhe devolve o resumo do prestador e marca como visualizada', async () => {
+      propostas.detalhe = {
+        ...propostaDeTeste(propostaId),
+        providerProfile: { memberSince: '2026-01-10T12:00:00.000Z', completedServices: 3 }
+      };
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals/${propostaId}`, clienteId);
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.headers['cache-control']).toBe('no-store,no-cache');
+      expect(resposta.json()).toMatchObject({ id: propostaId, status: 'Viewed', providerProfile: { completedServices: 3 } });
+      expect(propostas.marked).toBe(1);
+      expect(propostas.lastDetail).toEqual({ orderId: pedidoId, proposalId: propostaId, customerId: clienteId });
+    });
+
+    it('proposta inexistente responde 404 com detail', async () => {
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals/${propostaId}`, clienteId);
+      expect(resposta.statusCode).toBe(404);
+      expect(resposta.json().detail).toBe(`Proposta '${propostaId}' não foi encontrado.`);
+    });
+
+    it('publica as rotas autenticadas no OpenAPI', async () => {
+      const doc = (await app.inject({ method: 'GET', url: '/openapi/v1.json' })).json();
+      expect(doc.paths['/api/v1/orders/{id}/proposals'].get.security).toEqual([{ Bearer: [] }]);
+      expect(doc.paths['/api/v1/orders/{id}/proposals/{proposalId}'].get.tags).toEqual(['Propostas']);
     });
   });
 });
