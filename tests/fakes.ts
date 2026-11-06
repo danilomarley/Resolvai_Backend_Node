@@ -15,7 +15,9 @@ import type {
 } from '../src/application/contracts.js';
 import { criarPagina, type PaginaResponse } from '../src/application/dtos/common.js';
 import type { ResumoHomeResponse } from '../src/application/dtos/home.js';
-import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse } from '../src/application/dtos/pedidos.js';
+import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse, PropostaResponse } from '../src/application/dtos/pedidos.js';
+import type { DirecaoPropostas, OrdenacaoPropostas, PropostaDetalheResponse } from '../src/application/dtos/propostas.js';
+import type { IPropostaRepository } from '../src/application/services/proposta-service.js';
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
@@ -75,6 +77,46 @@ export class FakeQueries implements IPedidoQueries {
   private record(userId: string) {
     this.calls++;
     this.lastUserId = userId;
+  }
+}
+
+export function propostaDeTeste(id: string, extra: Partial<PropostaResponse> = {}): PropostaResponse {
+  return {
+    id,
+    providerId: '50000000-0000-4000-8000-000000000001',
+    providerName: 'Pedro Prestador',
+    status: 'Sent',
+    value: 500,
+    createdAt: new Date().toISOString(),
+    providerRating: { average: null, count: 0 },
+    ...extra
+  };
+}
+
+export class FakePropostaRepository implements IPropostaRepository {
+  propostas: PropostaResponse[] | null = [];
+  detalhe: PropostaDetalheResponse | null = null;
+  markResult = true;
+  marked = 0;
+  calls = 0;
+  lastList?: { orderId: string; customerId: string; sort: OrdenacaoPropostas; direction: DirecaoPropostas };
+  lastDetail?: { orderId: string; proposalId: string; customerId: string };
+
+  async list(orderId: string, customerId: string, sort: OrdenacaoPropostas, direction: DirecaoPropostas) {
+    this.calls++;
+    this.lastList = { orderId, customerId, sort, direction };
+    return this.propostas;
+  }
+
+  async getById(orderId: string, proposalId: string, customerId: string) {
+    this.calls++;
+    this.lastDetail = { orderId, proposalId, customerId };
+    return this.detalhe;
+  }
+
+  async markViewed() {
+    this.marked++;
+    return this.markResult;
   }
 }
 

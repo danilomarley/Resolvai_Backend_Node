@@ -9,12 +9,14 @@ import type { AssistentePedidoService } from '../application/services/assistente
 import type { AuthService } from '../application/services/auth-service.js';
 import { type FotoPedidoService, tamanhoMaximoFoto } from '../application/services/foto-pedido-service.js';
 import type { PedidoService } from '../application/services/pedido-service.js';
+import type { PropostaService } from '../application/services/proposta-service.js';
 import type { UserService } from '../application/services/user-service.js';
 import { criarHookDeAutenticacao, type VerificarToken } from './authentication.js';
 import { gerarTraceId, registrarTratamentoDeErros } from './problem-details.js';
 import { authRoutes } from './routes/auth-routes.js';
 import { homeRoutes } from './routes/home-routes.js';
 import { pedidosRoutes } from './routes/pedidos-routes.js';
+import { propostasRoutes } from './routes/propostas-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
 import { avaliacoesRoutes } from './routes/avaliacoes-routes.js';
 import type { AvaliacaoService } from '../application/services/avaliacao-service.js';
@@ -24,6 +26,7 @@ export interface Dependencias {
   authService: AuthService;
   userService: UserService;
   pedidoService: PedidoService;
+  propostaService: PropostaService;
   fotoPedidoService: FotoPedidoService;
   assistentePedidoService: AssistentePedidoService;
   /** Usado pela autenticação para aplicar papel e situação do perfil local. */
@@ -106,6 +109,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
 
     await protegido.register(usersRoutes(dependencias.userService));
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
+    await protegido.register(propostasRoutes(dependencias.propostaService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
     await protegido.register(avaliacoesRoutes(dependencias.avaliacaoService));
   });

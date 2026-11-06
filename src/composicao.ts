@@ -4,6 +4,7 @@ import { AssistentePedidoService } from './application/services/assistente-pedid
 import { AuthService } from './application/services/auth-service.js';
 import { FotoPedidoService } from './application/services/foto-pedido-service.js';
 import { PedidoService } from './application/services/pedido-service.js';
+import { PropostaService } from './application/services/proposta-service.js';
 import { UserService } from './application/services/user-service.js';
 import type { AppConfig } from './config/env.js';
 import { createDatabase, type Database } from './infrastructure/database.js';
@@ -12,6 +13,7 @@ import { ContatoRepository } from './infrastructure/repositories/contato-reposit
 import { EnderecoRepository } from './infrastructure/repositories/endereco-repository.js';
 import { PedidoQueries } from './infrastructure/repositories/pedido-queries.js';
 import { PedidoRepository } from './infrastructure/repositories/pedido-repository.js';
+import { PropostaRepository } from './infrastructure/repositories/proposta-repository.js';
 import { UserRepository } from './infrastructure/repositories/user-repository.js';
 import { SupabaseAuthClient } from './infrastructure/security/supabase-auth-client.js';
 import { SupabaseStorage } from './infrastructure/storage/supabase-storage.js';
@@ -33,6 +35,7 @@ export function criarDependencias(config: AppConfig, database: Database = create
     authService: new AuthService(userRepository, supabaseAuthClient),
     userService: new UserService(userRepository, new EnderecoRepository(database), new ContatoRepository(database), supabaseAuthClient),
     pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), userRepository),
+    propostaService: new PropostaService(new PropostaRepository(database)),
     fotoPedidoService: new FotoPedidoService(
       new SupabaseStorage({ url: config.supabase.url, serviceRoleKey: config.supabase.serviceRoleKey, bucket: config.supabase.storageBucket }),
       userRepository
