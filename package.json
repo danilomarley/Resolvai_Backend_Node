@@ -9,7 +9,8 @@
     "start": "node --env-file-if-exists=.env dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:postgres": "node --test tests/postgres/reviews.live.mjs"
   },
   "repository": {
     "type": "git",

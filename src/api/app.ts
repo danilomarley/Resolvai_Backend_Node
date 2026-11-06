@@ -16,8 +16,11 @@ import { authRoutes } from './routes/auth-routes.js';
 import { homeRoutes } from './routes/home-routes.js';
 import { pedidosRoutes } from './routes/pedidos-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
+import { avaliacoesRoutes } from './routes/avaliacoes-routes.js';
+import type { AvaliacaoService } from '../application/services/avaliacao-service.js';
 
 export interface Dependencias {
+  avaliacaoService: AvaliacaoService;
   authService: AuthService;
   userService: UserService;
   pedidoService: PedidoService;
@@ -104,6 +107,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
     await protegido.register(usersRoutes(dependencias.userService));
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
+    await protegido.register(avaliacoesRoutes(dependencias.avaliacaoService));
   });
 
   return app;

@@ -7,6 +7,7 @@ import { criarVerificadorDeToken } from '../src/api/authentication.js';
 import { UnauthorizedException } from '../src/application/errors.js';
 import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
+import { AvaliacaoService } from '../src/application/services/avaliacao-service.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { UserService } from '../src/application/services/user-service.js';
@@ -53,6 +54,7 @@ describe('API HTTP', () => {
     supabase = new FakeSupabase();
     app = await buildApp({
       dependencias: {
+        avaliacaoService: new AvaliacaoService({ async criar() { return 'notFound'; }, async consultar() { return undefined; }, async resumo() { return { count: 0, averageRating: null }; } }),
         userRepository: users,
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),

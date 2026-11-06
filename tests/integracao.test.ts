@@ -14,6 +14,8 @@ import { criarVerificadorDeToken } from '../src/api/authentication.js';
 import { ServicoIndisponivelException } from '../src/application/errors.js';
 import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
+import { AvaliacaoService } from '../src/application/services/avaliacao-service.js';
+import { AvaliacaoRepository } from '../src/infrastructure/repositories/avaliacao-repository.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { UserService } from '../src/application/services/user-service.js';
@@ -131,6 +133,7 @@ describe('Integração com PostgreSQL', () => {
     app = await buildApp({
       logger: process.env.DEBUG_LOG ? { level: 'error' } : false,
       dependencias: {
+        avaliacaoService: new AvaliacaoService(new AvaliacaoRepository(database)),
         userRepository: users,
         authService: new AuthService(users, supabase),
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
@@ -506,5 +509,45 @@ describe('Integração com PostgreSQL', () => {
     const resposta = await app.inject({ method: 'GET', url: '/health' });
     expect(resposta.statusCode).toBe(200);
     expect(resposta.json()).toEqual({ status: 'ok' });
+  });
+
+  describe('avaliação pós-serviço (#92)', () => {
+    const outroAvaliador = randomUUID();
+    beforeAll(async () => {
+      await database.query("insert into users (id, name, email, role) values ($1, 'Outro avaliador', 'avaliador@teste.com', 'Cliente')", [outroAvaliador]);
+    });
+    it('protege autenticação, propriedade, status, prestador e entradas inválidas', async () => {
+      expect((await app.inject({ method: 'POST', url: `/api/v1/orders/${pedido(3)}/review`, payload: { rating: 5 } })).statusCode).toBe(401);
+      expect((await chamar('POST', `/api/v1/orders/${pedido(3)}/review`, outroAvaliador, { rating: 5 })).statusCode).toBe(404);
+      expect((await chamar('POST', `/api/v1/orders/${pedido(1)}/review`, ids.cliente, { rating: 5 })).statusCode).toBe(400);
+      expect((await chamar('POST', `/api/v1/orders/${pedido(3)}/review`, ids.cliente, { rating: 5 })).statusCode).toBe(409);
+      for (const rating of [0, 6, 1.5, '5', null]) {
+        expect((await chamar('POST', `/api/v1/orders/${pedido(3)}/review`, ids.cliente, { rating })).statusCode).toBe(400);
+      }
+      expect((await chamar('POST', `/api/v1/orders/${pedido(3)}/review`, ids.cliente, { rating: 5, comment: 'x'.repeat(2001) })).statusCode).toBe(400);
+      expect((await chamar('GET', `/api/v1/orders/${pedido(3)}/review`, outroAvaliador)).statusCode).toBe(404);
+    });
+
+    it('persiste uma única avaliação mesmo com dois envios simultâneos e alimenta o resumo', async () => {
+      const id = randomUUID();
+      await database.query("insert into pedidos (id, id_cliente, status) values ($1, $2, 'concluido')", [id, ids.cliente]);
+      await database.query("insert into propostas (id_pedido, id_prestador, status, valor) values ($1, $2, 'escolhida', 100)", [id, ids.prestador]);
+      expect((await chamar('GET', `/api/v1/orders/${id}/review`, ids.cliente)).json()).toBeNull();
+      const results = await Promise.all([1, 2].map(() => chamar('POST', `/api/v1/orders/${id}/review`, ids.cliente, { rating: 4, comment: '  Ótimo serviço  ' })));
+      expect(results.map(r => r.statusCode).sort()).toEqual([201, 409]);
+      const review = (await chamar('GET', `/api/v1/orders/${id}/review`, ids.cliente)).json();
+      expect(review).toMatchObject({ orderId: id, providerId: ids.prestador, rating: 4, comment: 'Ótimo serviço' });
+      expect(review).not.toHaveProperty('id_cliente');
+      expect((await chamar('GET', '/api/v1/users/me/reviews/summary', ids.cliente)).json()).toEqual({ count: 1, averageRating: 4 });
+      expect((await chamar('GET', '/api/v1/users/me/reviews/summary', outroAvaliador)).json()).toEqual({ count: 0, averageRating: null });
+      const [row] = await database.query<{ count: number }>('select count(*) as count from avaliacoes where id_pedido = $1', [id]);
+      expect(row!.count).toBe(1);
+    });
+
+    it('publica o contrato autenticado no Swagger', async () => {
+      const spec = (await app.inject('/openapi/v1.json')).json();
+      expect(spec.paths['/api/v1/orders/{id}/review'].post.security).toEqual([{ Bearer: [] }]);
+      expect(spec.paths['/api/v1/orders/{id}/review'].post.responses['201']).toBeDefined();
+    });
   });
 });
