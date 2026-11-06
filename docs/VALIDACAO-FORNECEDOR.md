@@ -77,3 +77,5 @@ A validação visual pelo navegador foi interrompida pela ferramenta porque ela 
 Aviso conhecido dos testes: `react-test-renderer@19.2.8` é uma dependência de desenvolvimento fixada e emite aviso de depreciação. Ele foi mantido visível, sem suprimir erros React ou avisos de `act`. Não integra o bundle de produção e foi considerado contexto de manutenção não bloqueante na revisão.
 
 Auth e PostgreSQL continuam sendo sistemas separados, sem transação distribuída. Os limites de tentativas são locais a cada instância. Configurações privadas de CAPTCHA/hooks, entrega real de e-mail e ambiente publicado não foram validados por esses testes sintéticos.
+
+Os artefatos internos de teste e revisão em `.superpowers/sdd/fornecedor` foram mantidos e continuam ignorados pelo Git. A aprovação automática bloqueou sua exclusão porque o diretório do OneDrive é um ponto de reanálise e o destino físico da exclusão não foi considerado suficientemente estabelecido. Nenhuma tentativa de contornar o bloqueio foi feita; os arquivos não afetam o código entregue nem o funcionamento da aplicação.
