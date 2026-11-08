@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
+import { registrarTratamentoDeErros } from '../src/api/problem-details.js';
 import { FornecedorService } from '../src/application/services/fornecedor-service.js';
 import { SupabaseAuthClient } from '../src/infrastructure/security/supabase-auth-client.js';
 import { FakeEspecialidades, FakeFornecedores, FakeUsers } from './fakes.js';
@@ -89,6 +91,33 @@ class ExternalAuth {
 }
 
 describe('Supabase registration preserves external accounts', () => {
+  it.each([401, 403])('Auth admin refusal %s returns service configuration failure without creating a provider', async status => {
+    const external = new ExternalAuth();
+    external.createError = { error_code: 'not_admin', status };
+    const users = new FakeUsers();
+    const profiles = new FakeFornecedores();
+    const service = new FornecedorService(users, profiles, new FakeEspecialidades(), new SupabaseAuthClient(options, external.fetcher));
+    const app = Fastify();
+    registrarTratamentoDeErros(app);
+    app.post('/api/v1/auth/register-provider', () => service.register({
+      name: 'Sintético', email, password: passwordA, tipoPessoa: 'PF', nomeExibicao: 'Sintético',
+      cpf: '52998224725', telefone: '85999991234', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE',
+      raioAtendimentoKm: 20, especialidades: ['eletrica']
+    }));
+    try {
+      const result = await app.inject({ method: 'POST', url: '/api/v1/auth/register-provider' });
+      expect(result.statusCode).toBe(503);
+      expect(result.json()).toMatchObject({ code: 'AUTH_CONFIGURATION_ERROR', status: 503 });
+      expect(result.json().detail).toMatch(/configuração do serviço/);
+      expect(external.account).toBeUndefined();
+      expect(users.users.size).toBe(0);
+      expect(profiles.profiles.size).toBe(0);
+      expect(external.calls.map(call => call.path)).toEqual(['/auth/v1/settings', '/auth/v1/admin/users']);
+    } finally {
+      await app.close();
+    }
+  });
+
   it.each([false, true])('pending password A survives retry B, including autoconfirm=%s', async autoconfirm => {
     const external = new ExternalAuth();
     external.settings = { disable_signup: false, external: { email: true }, mailer_autoconfirm: autoconfirm };

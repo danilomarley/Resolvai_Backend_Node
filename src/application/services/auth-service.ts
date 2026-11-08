@@ -77,6 +77,10 @@ export class AuthService {
   async verificarEmail(_request: VerificarEmailRequest): Promise<void> {
   }
 
+  async solicitarRecuperacao(email: string, redirectTo: string): Promise<void> {
+    await this.supabaseAuthClient.requestPasswordRecovery(Email.create(email).value, redirectTo);
+  }
+
   /** Somente o sujeito de um Bearer verificado pode alterar sua senha. */
   async redefinirSenha(request: RedefinirSenhaRequest, currentUser: CurrentUser): Promise<void> {
     if (!currentUser.isAuthenticated || !currentUser.id) throw new UnauthorizedException();

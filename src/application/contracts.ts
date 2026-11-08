@@ -8,6 +8,7 @@ import type { EspecialidadeResponse, FornecedorResponse } from './dtos/fornecedo
 import type { PaginaResponse } from './dtos/common.js';
 import type { ResumoHomeResponse } from './dtos/home.js';
 import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse } from './dtos/pedidos.js';
+import type { ListarOportunidadesQuery, OportunidadeDetalhe, OportunidadesResponse } from './dtos/oportunidades.js';
 
 /**
  * Portador do Bearer token da requisição atual (equivalente ao ICurrentUser da API C#).
@@ -56,6 +57,11 @@ export interface IPedidoRepository {
   add(id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]): Promise<void>;
 }
 
+export interface IOportunidadeQueries {
+  list(providerId: string, query: ListarOportunidadesQuery): Promise<OportunidadesResponse>;
+  getById(id: string, providerId: string): Promise<OportunidadeDetalhe | null>;
+}
+
 export interface SupabaseAuthUser {
   id: string;
   email: string;
@@ -70,6 +76,7 @@ export interface SupabaseSession {
 }
 
 export interface ISupabaseAuthClient {
+  requestPasswordRecovery(email: string, redirectTo: string): Promise<void>;
   refreshSession(refreshToken: string): Promise<SupabaseSession>;
   signInWithPassword(email: string, password: string): Promise<SupabaseSession>;
   signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser>;

@@ -24,6 +24,9 @@ import { createDatabase, type Database } from '../src/infrastructure/database.js
 import { ContatoRepository } from '../src/infrastructure/repositories/contato-repository.js';
 import { EnderecoRepository } from '../src/infrastructure/repositories/endereco-repository.js';
 import { PedidoQueries } from '../src/infrastructure/repositories/pedido-queries.js';
+import { OportunidadeQueries } from '../src/infrastructure/repositories/oportunidade-queries.js';
+import { PropostaRepository } from '../src/infrastructure/repositories/proposta-repository.js';
+import { PropostaService } from '../src/application/services/proposta-service.js';
 import { PedidoRepository } from '../src/infrastructure/repositories/pedido-repository.js';
 import { UserRepository } from '../src/infrastructure/repositories/user-repository.js';
 import { FakeArmazenamento, FakeAssistente, FakeSupabase } from './fakes.js';
@@ -135,12 +138,14 @@ describe('Integração com PostgreSQL', () => {
     const users = new UserRepository(database);
     const fornecedores = new FornecedorRepository(database);
     const especialidades = new EspecialidadeQueries(database);
+    const fornecedorService = new FornecedorService(users, fornecedores, especialidades, supabase, new OportunidadeQueries(database));
     app = await buildApp({
       logger: process.env.DEBUG_LOG ? { level: 'error' } : false,
       dependencias: {
         userRepository: users,
         authService: new AuthService(users, supabase, fornecedores),
-        fornecedorService: new FornecedorService(users, fornecedores, especialidades, supabase),
+        fornecedorService,
+        propostaService: new PropostaService(fornecedorService, new PropostaRepository(database), armazenamento),
         especialidadeQueries: especialidades,
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
@@ -660,6 +665,188 @@ describe('Integração com PostgreSQL', () => {
       assistente.erro = undefined;
       expect(resposta.statusCode).toBe(503);
       expect(resposta.json().detail).toBe('O assistente de pedidos não está configurado neste servidor.');
+    });
+  });
+
+  describe('oportunidades por especialidade do fornecedor', () => {
+    const provider = randomUUID();
+    const otherProvider = randomUUID();
+    const missingProfile = randomUUID();
+    const inactiveProvider = randomUUID();
+    const orderIds = Array.from({ length: 12 }, () => randomUUID());
+    const feed = '/api/v1/fornecedores/me/oportunidades';
+    const search = '?search=OP-TEST';
+
+    beforeAll(async () => {
+      for (const [index, id] of [provider, otherProvider, missingProfile, inactiveProvider].entries()) {
+        await database.query(`insert into users(id,name,email,role,is_active) values($1,'Fornecedor de teste',$2,'Prestador',$3)`, [id, `oportunidade${index}@test.invalid`, id !== inactiveProvider]);
+      }
+      for (const id of [provider, otherProvider, inactiveProvider]) {
+        await database.query(`insert into fornecedores(id_usuario,tipo_pessoa,nome_exibicao,cidade_atuacao,uf_atuacao) values($1,'PF','Teste','Fortaleza','CE')`, [id]);
+      }
+      await database.query("insert into especialidades(codigo,nome,is_active) values('op_inativa','OP inativa',false)");
+      await database.query(`insert into fornecedor_especialidades(id_usuario,codigo_especialidade) values ($1,'eletrica'),($1,'hidraulica'),($1,'op_inativa'),($2,'pintura'),($3,'eletrica')`, [provider, otherProvider, inactiveProvider]);
+      const categories = ['Elétrica', 'eletrica', '  ELÉTRICA  ', 'HIDRAULICA', 'Pintura', 'Reformas', 'Elétrica', 'Elétrica', 'Elétrica', 'OP inativa', null, 'Elétrica'];
+      for (let index = 0; index < categories.length; index++) {
+        const scope = { titulo: `OP-TEST ${index}`, categoria: categories[index], localizacao: 'Cidade distante, SP', descricao: 'Descrição real', detalhes: 'Detalhes reais', especificacoes: 'Especificações reais', urgencia: 'Urgente', segredoInterno: 'não expor' };
+        await database.query(`insert into pedidos(id,id_cliente,escopo,status,data_criacao) values($1,$2,$3::jsonb,$4,'2026-11-01T12:00:00Z')`,
+          [orderIds[index], index === 11 ? provider : ids.cliente, JSON.stringify(scope), index === 6 ? 'em_andamento' : index === 7 ? 'concluido' : 'aberto']);
+      }
+      await database.query(`insert into propostas(id_pedido,id_prestador,status,valor) values($1,$2,'escolhida',100),($3,$2,'enviada',200),($3,$2,'visualizada',300)`, [orderIds[8], otherProvider, orderIds[0]]);
+      await database.query(`insert into fotos_pedido(id_pedido,foto,descricao) values($1,'https://example.invalid/foto.jpg','Foto do cliente')`, [orderIds[0]]);
+    });
+
+    it('lista todos os abertos compatíveis, por código ou nome sem diferença de acentos, sem filtrar região', async () => {
+      const response = await chamar('GET', `${feed}${search}`, provider);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      const body = response.json();
+      expect(body.totalItems).toBe(4);
+      expect(body.totalPages).toBe(1);
+      expect(body.items.map((item: { id: string }) => item.id).sort()).toEqual(orderIds.slice(0, 4).sort());
+      expect(body.specialties.map((item: { codigo: string }) => item.codigo)).toEqual(['eletrica', 'hidraulica']);
+      expect(body.items.find((item: { id: string }) => item.id === orderIds[0])).toMatchObject({ category: 'Elétrica', specialtyCode: 'eletrica', proposalsCount: 2 });
+      expect(body.items.every((item: { location: string }) => item.location === 'Cidade distante, SP')).toBe(true);
+    });
+
+    it('pagina sem duplicatas e filtra por especialidade e busca literal', async () => {
+      const first = (await chamar('GET', `${feed}${search}&pageSize=2`, provider)).json();
+      const second = (await chamar('GET', `${feed}${search}&pageSize=2&page=2`, provider)).json();
+      expect(first.totalItems).toBe(4);
+      expect(first.totalPages).toBe(2);
+      expect(new Set([...first.items, ...second.items].map((item: { id: string }) => item.id)).size).toBe(4);
+      const category = (await chamar('GET', `${feed}${search}&category=hidraulica`, provider)).json();
+      expect(category.totalItems).toBe(1);
+      expect(category.items[0].id).toBe(orderIds[3]);
+      expect((await chamar('GET', `${feed}${search}&category=pintura`, provider)).json().totalItems).toBe(0);
+      expect((await chamar('GET', `${feed}?search=%25`, provider)).json().totalItems).toBe(0);
+      const sorted = (await chamar('GET', `${feed}${search}&sort=proposals`, provider)).json();
+      expect(sorted.items.at(-1).id).toBe(orderIds[0]);
+    });
+
+    it('protege a listagem e usa as especialidades do sujeito do token', async () => {
+      expect((await app.inject({ method: 'GET', url: feed })).statusCode).toBe(401);
+      for (const id of [ids.cliente, ids.admin]) expect((await chamar('GET', feed, id)).statusCode).toBe(403);
+      expect((await chamar('GET', feed, missingProfile)).statusCode).toBe(404);
+      expect((await chamar('GET', feed, inactiveProvider)).statusCode).toBe(401);
+      expect((await chamar('GET', `${feed}${search}`, otherProvider)).json().items.map((item: { id: string }) => item.id)).toEqual([orderIds[4]]);
+      expect((await chamar('GET', `${feed}${search}&providerId=${otherProvider}`, provider)).statusCode).toBe(400);
+      for (const query of ['page=0', 'pageSize=51', 'sort=anything']) expect((await chamar('GET', `${feed}?${query}`, provider)).statusCode).toBe(400);
+    });
+
+    it('mostra detalhes e fotos reais apenas enquanto o pedido está elegível, sem propostas ou dados privados', async () => {
+      const detail = await chamar('GET', `${feed}/${orderIds[0]}`, provider);
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json()).toMatchObject({ id: orderIds[0], description: 'Descrição real', details: 'Detalhes reais', specifications: 'Especificações reais', proposalsCount: 2, photos: [{ url: 'https://example.invalid/foto.jpg' }] });
+      expect(detail.json()).not.toHaveProperty('scope');
+      expect(detail.json()).not.toHaveProperty('proposals');
+      expect(detail.json().client).toMatchObject({ name: 'Maria Cliente', ordersCount: expect.any(Number), completedOrdersCount: expect.any(Number) });
+      expect(detail.json().client.completedOrdersCount).toBeGreaterThan(0);
+      expect(Number.isFinite(Date.parse(detail.json().client.memberSince))).toBe(true);
+      expect(Object.keys(detail.json().client).sort()).toEqual(['completedOrdersCount', 'memberSince', 'name', 'ordersCount']);
+      expect(detail.body).not.toContain('segredoInterno');
+      for (const id of [orderIds[4], orderIds[6], orderIds[7], orderIds[8], orderIds[9], orderIds[11], randomUUID(), 'invalid']) {
+        expect((await chamar('GET', `${feed}/${id}`, provider)).statusCode).toBe(404);
+      }
+      await database.query("update pedidos set status='cancelado' where id=$1", [orderIds[0]]);
+      expect((await chamar('GET', `${feed}/${orderIds[0]}`, provider)).statusCode).toBe(404);
+    });
+
+    it('retorna vazio e reavalia imediatamente especialidades alteradas ou desativadas', async () => {
+      await database.query('delete from fornecedor_especialidades where id_usuario=$1', [otherProvider]);
+      const empty = (await chamar('GET', `${feed}${search}`, otherProvider)).json();
+      expect(empty).toMatchObject({ items: [], totalItems: 0, totalPages: 0, specialties: [] });
+      await database.query("insert into fornecedor_especialidades(id_usuario,codigo_especialidade) values($1,'hidraulica')", [otherProvider]);
+      expect((await chamar('GET', `${feed}${search}`, otherProvider)).json().items.map((item: { id: string }) => item.id)).toEqual([orderIds[3]]);
+      // A specialty specific to this fixture can be disabled without affecting other tests.
+      await database.query("update especialidades set is_active=true where codigo='op_inativa'");
+      expect((await chamar('GET', `${feed}/${orderIds[9]}`, provider)).statusCode).toBe(200);
+      await database.query("update especialidades set is_active=false where codigo='op_inativa'");
+      expect((await chamar('GET', `${feed}/${orderIds[9]}`, provider)).statusCode).toBe(404);
+    });
+  });
+
+  describe('envio de proposta com formulário e portfólio', () => {
+    const provider = randomUUID();
+    const otherProvider = randomUUID();
+    const orderId = randomUUID();
+    const closedId = randomUUID();
+    const mismatchedId = randomUUID();
+    const png = Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]);
+    const makeData = () => ({ requestId: randomUUID(), valueCents: 145000, deadline: '3 dias', startDate: '2099-01-01',
+      description: 'Diagnóstico e reparo completo da instalação elétrica.', materials: 'Tomada e conduítes',
+      guaranteePeriod: '90 dias', guaranteeType: 'Reexecução gratuita', guaranteeConditions: 'Cobre os serviços realizados.' });
+    const url = (id: string = orderId) => `/api/v1/fornecedores/me/oportunidades/${id}/propostas`;
+    const multipart = (data: unknown, files: { bytes: Buffer; type: string; name: string }[] = []) => {
+      const boundary = `test-${randomUUID()}`;
+      const chunks: Buffer[] = [Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="proposal"\r\n\r\n${JSON.stringify(data)}\r\n`)];
+      for (const file of files) chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="portfolio"; filename="${file.name}"\r\nContent-Type: ${file.type}\r\n\r\n`),file.bytes,Buffer.from('\r\n'));
+      chunks.push(Buffer.from(`--${boundary}--\r\n`));
+      return { body: Buffer.concat(chunks), contentType: `multipart/form-data; boundary=${boundary}` };
+    };
+    const send = async (data: unknown, files: { bytes: Buffer; type: string; name: string }[] = [], sub: string = provider, id: string = orderId) => {
+      const payload = multipart(data, files);
+      return app.inject({ method: 'POST', url: url(id), payload: payload.body,
+        headers: { 'content-type': payload.contentType, authorization: `Bearer ${await token(sub)}` } });
+    };
+    beforeAll(async () => {
+      for (const [index, id] of [provider, otherProvider].entries()) {
+        await database.query(`insert into users(id,name,email,role) values($1,'Proponente',$2,'Prestador')`, [id, `proponente${index}@test.invalid`]);
+        await database.query(`insert into fornecedores(id_usuario,tipo_pessoa,nome_exibicao,cidade_atuacao,uf_atuacao) values($1,'PF','Teste','Fortaleza','CE')`, [id]);
+        await database.query(`insert into fornecedor_especialidades(id_usuario,codigo_especialidade) values($1,'eletrica')`, [id]);
+      }
+      for (const id of [orderId, closedId, mismatchedId]) {
+        await database.query(`insert into pedidos(id,id_cliente,escopo,status) values($1,$2,$3::jsonb,$4)`, [id, ids.cliente,
+          JSON.stringify({ categoria: id === mismatchedId ? 'Pintura' : 'Elétrica', titulo: 'Teste de proposta' }), id === closedId ? 'concluido' : 'aberto']);
+      }
+    });
+    it('salva todos os campos e as URLs reais das fotos e permite consultar apenas a própria proposta', async () => {
+      const data = makeData();
+      const response = await send(data, [{ bytes: png, type: 'image/png', name: 'trabalho.png' }]);
+      expect(response.statusCode, response.body).toBe(201);
+      expect(response.json()).toMatchObject({ id: data.requestId, orderId, status: 'Sent', value: 1450, deadline: '3 dias', startDate: '2099-01-01', materials: data.materials,
+        warranty: { period: '90 dias', type: 'Reexecução gratuita', conditions: data.guaranteeConditions }, portfolio: [{ name: 'trabalho.png', url: expect.stringContaining('/propostas/') }] });
+      const [saved] = await database.query<{ [key: string]: unknown }>('select * from propostas where id=$1', [data.requestId]);
+      expect(saved).toMatchObject({ id_pedido: orderId, id_prestador: provider, valor: 1450, materiais: data.materials, garantia_prazo: '90 dias', garantia_tipo: 'Reexecução gratuita', garantia_condicoes: data.guaranteeConditions });
+      expect(saved!.garantia).toContain('90 dias');
+      expect((await chamar('GET', response.headers.location as string, provider)).json()).toEqual(response.json());
+      expect((await chamar('GET', response.headers.location as string, otherProvider)).statusCode).toBe(404);
+    });
+    it('repetir uma tentativa preserva a mesma proposta sem duplicar registro ou upload', async () => {
+      const data = makeData();
+      const before = armazenamento.enviados.length;
+      const files = [{ bytes: png, type: 'image/png', name: 'portfolio.png' }];
+      const first = await send(data, files);
+      const second = await send(data, files);
+      expect(first.statusCode).toBe(201);
+      expect(second.json()).toEqual(first.json());
+      expect(armazenamento.enviados.length - before).toBe(1);
+      const [count] = await database.query<{ total: number }>('select count(*) as total from propostas where id=$1', [data.requestId]);
+      expect(count?.total).toBe(1);
+      expect((await send({ ...data, valueCents: 200000 }, files)).statusCode).toBe(409);
+    });
+    it('serializa envios concorrentes com o mesmo identificador sem duplicar a proposta', async () => {
+      const data = makeData();
+      const files = [{ bytes: png, type: 'image/png', name: 'concorrente.png' }];
+      const results = await Promise.all([send(data, files), send(data, files)]);
+      expect(results.map(result => result.statusCode)).toEqual([201,201]);
+      expect(results[0]!.json()).toEqual(results[1]!.json());
+      const [count] = await database.query<{ total: number }>('select count(*) as total from propostas where id=$1', [data.requestId]);
+      expect(count?.total).toBe(1);
+      const retainedPath = results[0]!.json().portfolio[0].url.split('/public/pedidos/')[1];
+      expect(armazenamento.removidos).not.toContain(retainedPath);
+    });
+    it('impede usuários sem permissão, pedidos encerrados, especialidades diferentes e dados inválidos', async () => {
+      const raw = multipart(makeData());
+      expect((await app.inject({ method: 'POST', url: url(), payload: raw.body, headers: { 'content-type': raw.contentType } })).statusCode).toBe(401);
+      expect((await send(makeData(), [], ids.cliente)).statusCode).toBe(403);
+      expect((await send(makeData(), [], provider, closedId)).statusCode).toBe(404);
+      expect((await send(makeData(), [], provider, mismatchedId)).statusCode).toBe(404);
+      for (const invalid of [{ valueCents: 0 }, { valueCents: 1.5 }, { guaranteePeriod: '' }, { startDate: '2026-02-30' }, { startDate: '2000-01-01' }, { id_prestador: otherProvider }]) {
+        expect((await send({ ...makeData(), ...invalid })).statusCode).toBe(400);
+      }
+      expect((await send(makeData(), [{ bytes: Buffer.from('not an image'), type: 'image/png', name: 'fake.png' }])).statusCode).toBe(400);
+      expect((await send(makeData(), Array.from({ length: 6 }, () => ({ bytes: png, type: 'image/png', name: 'extra.png' })))).statusCode).toBe(413);
     });
   });
 

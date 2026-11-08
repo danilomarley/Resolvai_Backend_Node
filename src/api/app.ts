@@ -19,8 +19,11 @@ import { authRoutes } from './routes/auth-routes.js';
 import { homeRoutes } from './routes/home-routes.js';
 import { pedidosRoutes } from './routes/pedidos-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
+import { propostasRoutes } from './routes/propostas-routes.js';
+import type { PropostaService } from '../application/services/proposta-service.js';
 
 export interface Dependencias {
+  propostaService?: PropostaService;
   fornecedorService: FornecedorService;
   especialidadeQueries: IEspecialidadeQueries;
   authService: AuthService;
@@ -97,7 +100,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
   // Uma foto por requisição, até 5 MB (POST /api/v1/orders/photos).
   await app.register(fastifyMultipart, { limits: { fileSize: tamanhoMaximoFoto, files: 1, fields: 5, parts: 6 } });
 
-  await app.register(authRoutes(dependencias.authService, dependencias.verificarToken, dependencias.userRepository));
+  await app.register(authRoutes(dependencias.authService, dependencias.verificarToken, dependencias.userRepository, corsAllowedOrigins));
   await app.register(fornecedoresPublicRoutes(dependencias.fornecedorService, dependencias.especialidadeQueries));
 
   // Protegido por padrão: tudo registrado aqui exige Bearer token válido.
@@ -109,6 +112,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
 
     await protegido.register(usersRoutes(dependencias.userService));
     await protegido.register(fornecedoresRoutes(dependencias.fornecedorService));
+    if (dependencias.propostaService) await protegido.register(propostasRoutes(dependencias.propostaService));
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
   });

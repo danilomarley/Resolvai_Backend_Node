@@ -5,6 +5,7 @@ import {
   loginRequestSchema,
   loginResponseSchema,
   refreshRequestSchema,
+  recuperarSenhaRequestSchema,
   redefinirSenhaRequestSchema,
   registerRequestSchema,
   verificarEmailRequestSchema
@@ -15,16 +16,18 @@ import { LimitadorDeTentativas } from '../limitador.js';
 import { urlAbsoluta } from './util.js';
 import { criarHookDeAutenticacao, type VerificarToken } from '../authentication.js';
 import type { IUserRepository } from '../../application/contracts.js';
+import { DomainException } from '../../domain/errors.js';
 
 const mensagemDeLimite = 'Muitas tentativas de recuperação de senha. Aguarde 15 minutos e tente novamente.';
 
 /**
  * Rotas públicas (equivalente ao AuthController com [AllowAnonymous]).
  */
-export function authRoutes(authService: AuthService, verificarToken: VerificarToken, users: IUserRepository) {
+export function authRoutes(authService: AuthService, verificarToken: VerificarToken, users: IUserRepository, allowedOrigins: string[] = []) {
   const porIp = new LimitadorDeTentativas(10, 15 * 60 * 1000);
   const porUsuario = new LimitadorDeTentativas(5, 15 * 60 * 1000);
   const cadastrosPorIp = new LimitadorDeTentativas(10, 15 * 60 * 1000);
+  const recuperacoesPorEmail = new LimitadorDeTentativas(1, 60 * 1000);
 
   return async (app: FastifyInstance) => {
     app.addHook('preHandler', async (_request, reply) => { reply.header('Cache-Control', 'no-store'); });
@@ -75,6 +78,28 @@ export function authRoutes(authService: AuthService, verificarToken: VerificarTo
         porIp.registrar(`check:${request.ip}`, mensagemDeLimite);
         await authService.verificarEmail(request.body);
         return { message: 'Se houver uma conta, use o fluxo de recuperação do Supabase Auth.' };
+      }
+    });
+
+    rotas.post('/api/v1/auth/forgot-password', {
+      onRequest: async request => { porIp.registrar(`forgot:${request.ip}`, mensagemDeLimite); },
+      schema: {
+        tags: ['Auth'],
+        summary: 'Envia o link de recuperação pelo Supabase Auth, sem divulgar a existência da conta.',
+        body: recuperarSenhaRequestSchema,
+        response: { 200: z.object({ message: z.string() }) }
+      },
+      handler: async request => {
+        const redirect = new URL(request.body.redirectTo);
+        if (!['http:', 'https:'].includes(redirect.protocol) || redirect.username || redirect.password
+          || redirect.pathname !== '/redefinir-senha' || redirect.search || redirect.hash
+          || !allowedOrigins.includes(redirect.origin)) {
+          throw new DomainException('Endereço de retorno da recuperação não permitido.');
+        }
+        const email = request.body.email.trim().toLowerCase();
+        recuperacoesPorEmail.registrar(email, 'Aguarde um minuto antes de solicitar outro link.');
+        await authService.solicitarRecuperacao(email, redirect.href);
+        return { message: 'Se houver uma conta associada a este e-mail, você receberá um link para redefinir sua senha.' };
       }
     });
 

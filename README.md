@@ -78,6 +78,10 @@ tests/                 Vitest
 | POST | `/api/v1/auth/reset-password` | Bearer, altera somente a senha do dono do token |
 | GET | `/api/v1/especialidades` | público, catálogo ativo |
 | GET | `/api/v1/fornecedores/me` | Prestador ativo, próprio perfil |
+| GET | `/api/v1/fornecedores/me/oportunidades` | Prestador ativo, pedidos abertos das próprias especialidades |
+| GET | `/api/v1/fornecedores/me/oportunidades/{id}` | Prestador ativo, detalhe de um pedido compatível e disponível |
+| POST | `/api/v1/fornecedores/me/oportunidades/{id}/propostas` | Prestador ativo, formulário multipart e até 5 fotos |
+| GET | `/api/v1/fornecedores/me/oportunidades/{id}/propostas/{proposalId}` | Prestador ativo, somente a própria proposta |
 | PATCH | `/api/v1/fornecedores/me` | Prestador ativo, próprio perfil |
 | GET | `/api/v1/users/me` | autenticado |
 | POST | `/api/v1/users/me/complete-registration` | Cliente autenticado |

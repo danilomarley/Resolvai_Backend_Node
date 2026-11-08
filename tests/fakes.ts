@@ -165,6 +165,8 @@ export class FakeContatos implements IContatoRepository {
 }
 
 export class FakeArmazenamento implements IArmazenamentoFotos {
+  readonly removidos: string[] = [];
+  async remover(caminhos: string[]) { this.removidos.push(...caminhos); }
   readonly enviados: { caminho: string; tamanho: number; contentType: string }[] = [];
   async enviar(caminho: string, conteudo: Buffer, contentType: string) {
     this.enviados.push({ caminho, tamanho: conteudo.length, contentType });
@@ -189,6 +191,11 @@ export class FakeAssistente implements IAssistentePedido {
 }
 
 export class FakeSupabase implements ISupabaseAuthClient {
+  readonly recuperacoes: { email: string; redirectTo: string }[] = [];
+  async requestPasswordRecovery(email: string, redirectTo: string) {
+    if (this.erro) throw this.erro;
+    this.recuperacoes.push({ email, redirectTo });
+  }
   session?: SupabaseSession;
   novoUsuario?: SupabaseAuthUser;
   erro?: Error;

@@ -1,5 +1,5 @@
 import type { ISupabaseAuthClient, SupabaseAuthUser, SupabaseSession } from '../../application/contracts.js';
-import { ConflictException, ForbiddenException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
+import { ConfiguracaoAuthException, ConflictException, ForbiddenException, MuitasTentativasException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
 import { DomainException } from '../../domain/errors.js';
 
 export interface SupabaseAuthOptions {
@@ -78,6 +78,7 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     }
     if (isConflict(response, payload)) return this.recoverUser(email, password);
     if (response.status >= 500) return this.recoverUser(email, password, true);
+    if (response.status === 401 || response.status === 403) throw new ConfiguracaoAuthException();
     ensureSuccess(response, 'Falha ao registrar no Supabase Auth.');
     const user = deserialize<UserDto>(payload);
     if (!user || !isGuid(user.id) || user.email?.toLowerCase() !== email.toLowerCase()) {
@@ -162,6 +163,17 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     }
 
     return { id: body.id!.toLowerCase(), email: body.email ?? email };
+  }
+
+  async requestPasswordRecovery(email: string, redirectTo: string): Promise<void> {
+    const query = new URLSearchParams({ redirect_to: redirectTo });
+    const response = await this.send(`auth/v1/recover?${query}`, this.options.anonKey, { email });
+    const payload = await response.text();
+    if (response.status === 429) throw new MuitasTentativasException();
+    // Do not reveal whether an email belongs to an account.
+    const error = deserialize<{ error_code?: string; code?: string }>(payload);
+    if ([400, 404, 422].includes(response.status) && (error?.error_code ?? error?.code) === 'user_not_found') return;
+    if (!response.ok) throw new ServicoIndisponivelException('Não foi possível enviar o e-mail de recuperação. Tente novamente mais tarde.');
   }
 
   async adminUpdatePassword(userId: string, password: string): Promise<void> {

@@ -14,10 +14,13 @@ import { ClaudeAssistentePedido } from './infrastructure/ia/claude-assistente-pe
 import { ContatoRepository } from './infrastructure/repositories/contato-repository.js';
 import { EnderecoRepository } from './infrastructure/repositories/endereco-repository.js';
 import { PedidoQueries } from './infrastructure/repositories/pedido-queries.js';
+import { OportunidadeQueries } from './infrastructure/repositories/oportunidade-queries.js';
 import { PedidoRepository } from './infrastructure/repositories/pedido-repository.js';
 import { UserRepository } from './infrastructure/repositories/user-repository.js';
 import { SupabaseAuthClient } from './infrastructure/security/supabase-auth-client.js';
 import { SupabaseStorage } from './infrastructure/storage/supabase-storage.js';
+import { PropostaService } from './application/services/proposta-service.js';
+import { PropostaRepository } from './infrastructure/repositories/proposta-repository.js';
 
 /**
  * Raiz de composição: liga serviços, repositórios e clientes externos
@@ -28,12 +31,15 @@ export function criarDependencias(config: AppConfig, database: Database = create
   const supabaseAuthClient = new SupabaseAuthClient(config.supabase);
   const fornecedores = new FornecedorRepository(database);
   const especialidades = new EspecialidadeQueries(database);
+  const fornecedorService = new FornecedorService(userRepository, fornecedores, especialidades, supabaseAuthClient, new OportunidadeQueries(database));
+  const storage = new SupabaseStorage({ url: config.supabase.url, serviceRoleKey: config.supabase.serviceRoleKey, bucket: config.supabase.storageBucket });
 
   return {
     database,
     userRepository,
     authService: new AuthService(userRepository, supabaseAuthClient, fornecedores),
-    fornecedorService: new FornecedorService(userRepository, fornecedores, especialidades, supabaseAuthClient),
+    fornecedorService,
+    propostaService: new PropostaService(fornecedorService, new PropostaRepository(database), storage),
     especialidadeQueries: especialidades,
     userService: new UserService(userRepository, new EnderecoRepository(database), new ContatoRepository(database), supabaseAuthClient),
     pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), userRepository),

@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { FastifyError, FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { hasZodFastifySchemaValidationErrors } from 'fastify-type-provider-zod';
 import {
+  ConfiguracaoAuthException,
   ConflictException,
   ForbiddenException,
   MuitasTentativasException,
@@ -47,6 +48,7 @@ export interface Problema {
   detail?: string;
   instance?: string;
   errors?: Record<string, string[]>;
+  code?: string;
 }
 
 /**
@@ -70,6 +72,7 @@ export function enviarProblema(reply: FastifyReply, status: number, problema: Pr
       detail: problema.detail,
       instance: problema.instance,
       errors: problema.errors,
+      code: problema.code,
       traceId: String(reply.request.id)
     });
 }
@@ -131,7 +134,10 @@ export function registrarTratamentoDeErros(app: FastifyInstance): void {
         `Requisição ${instance} rejeitada com ${traduzido.status}: ${error.message}`
       );
       semCacheDeErro(reply);
-      return enviarProblema(reply, traduzido.status, { title: traduzido.title, detail: error.message, instance });
+      return enviarProblema(reply, traduzido.status, {
+        title: traduzido.title, detail: error.message, instance,
+        ...(error instanceof ConfiguracaoAuthException ? { code: error.code } : {})
+      });
     }
 
     // Erros do próprio Fastify (JSON inválido, corpo vazio, media type não suportado, corpo grande demais).

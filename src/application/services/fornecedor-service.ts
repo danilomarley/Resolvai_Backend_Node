@@ -6,9 +6,11 @@ import { DomainException } from '../../domain/errors.js';
 import { Fornecedor } from '../../domain/fornecedor.js';
 import { normalizarTelefone } from '../../domain/telefone.js';
 import { User } from '../../domain/user.js';
-import type { CurrentUser, IEspecialidadeQueries, IFornecedorRepository, ISupabaseAuthClient, IUserRepository } from '../contracts.js';
+import type { CurrentUser, IEspecialidadeQueries, IFornecedorRepository, IOportunidadeQueries, ISupabaseAuthClient, IUserRepository } from '../contracts.js';
+import type { ListarOportunidadesQuery } from '../dtos/oportunidades.js';
+import { normalizarGuid } from '../../api/guid.js';
 import type { AtualizarFornecedorRequest, FornecedorResponse, RegisterFornecedorRequest } from '../dtos/fornecedores.js';
-import { ConflictException, ForbiddenException, NotFoundException, ServicoIndisponivelException, UnauthorizedException } from '../errors.js';
+import { ConfiguracaoAuthException, ConflictException, ForbiddenException, NotFoundException, ServicoIndisponivelException, UnauthorizedException } from '../errors.js';
 
 const pendente = () => new ServicoIndisponivelException('Cadastro pendente. Confirme seu e-mail e tente novamente com os mesmos dados e credenciais.');
 
@@ -17,7 +19,8 @@ export class FornecedorService {
     private readonly users: IUserRepository,
     private readonly fornecedores: IFornecedorRepository,
     private readonly especialidades: IEspecialidadeQueries,
-    private readonly auth: ISupabaseAuthClient
+    private readonly auth: ISupabaseAuthClient,
+    private readonly oportunidades?: IOportunidadeQueries
   ) {}
 
   async register(request: RegisterFornecedorRequest): Promise<FornecedorResponse> {
@@ -35,7 +38,7 @@ export class FornecedorService {
     try {
       identidade = await this.auth.signUp(email.value, request.password, request.name.trim());
     } catch (error) {
-      if (error instanceof ConflictException || error instanceof DomainException || error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error;
+      if (error instanceof ConfiguracaoAuthException || error instanceof ConflictException || error instanceof DomainException || error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error;
       throw pendente();
     }
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identidade.id)
@@ -75,6 +78,22 @@ export class FornecedorService {
     user.changeName(request.name);
     await this.fornecedores.updateComplete(user, fornecedor, Contato.register(user.id, 'whatsapp', telefone, true), codigos);
     return this.getCurrent(current);
+  }
+
+  async listOpportunities(current: CurrentUser, query: ListarOportunidadesQuery) {
+    const profile = await this.getCurrent(current);
+    if (!this.oportunidades) throw new ServicoIndisponivelException('Oportunidades indisponíveis no momento.');
+    return this.oportunidades.list(profile.idUsuario, query);
+  }
+
+  async getOpportunity(current: CurrentUser, requestedId: string) {
+    const profile = await this.getCurrent(current);
+    const id = normalizarGuid(requestedId);
+    if (!id) throw new NotFoundException('Oportunidade', requestedId);
+    if (!this.oportunidades) throw new ServicoIndisponivelException('Oportunidades indisponíveis no momento.');
+    const opportunity = await this.oportunidades.getById(id, profile.idUsuario);
+    if (!opportunity) throw new NotFoundException('Oportunidade', id);
+    return opportunity;
   }
 
   private async exigirPrestador(current: CurrentUser): Promise<User> {

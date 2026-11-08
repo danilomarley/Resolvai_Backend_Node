@@ -36,6 +36,16 @@ export class ServicoIndisponivelException extends Error {
   }
 }
 
+/** Credencial do servidor recusada antes da criação de uma conta no Auth. */
+export class ConfiguracaoAuthException extends ServicoIndisponivelException {
+  readonly code = 'AUTH_CONFIGURATION_ERROR';
+
+  constructor() {
+    super('O cadastro está indisponível por uma falha de configuração do serviço. Entre em contato com o suporte.');
+    this.name = 'ConfiguracaoAuthException';
+  }
+}
+
 /**
  * Limite de tentativas excedido (vira 429).
  */
