@@ -1,5 +1,5 @@
+import type { CurrentUser } from '../contracts.js';
 import { DomainException } from '../../domain/errors.js';
-import type { CurrentUser, IUserRepository } from '../contracts.js';
 import type { PaginaResponse } from '../dtos/common.js';
 import type {
   CriarPropostaPrestador,
@@ -10,6 +10,8 @@ import type {
 } from '../dtos/prestador.js';
 import { ConflictException, NotFoundException } from '../errors.js';
 import { getUserId } from './prestador-service.js';
+import type { FornecedorService } from './fornecedor-service.js';
+import type { ArmazenamentoPortfolio } from './proposta-fornecedor-service.js';
 
 export type PaginaPropostasPrestador = PaginaResponse<PropostaPrestadorResponse> & { counts: ResumoPrestador['proposals'] };
 export interface FiltroPropostasPrestador {
@@ -17,9 +19,9 @@ export interface FiltroPropostasPrestador {
   q?: string;
 }
 
-export type ResultadoCriarProposta = PropostaPrestadorResponse | 'notFound' | 'closed' | 'duplicate';
+export type ResultadoCriarProposta = PropostaPrestadorResponse | 'notFound' | 'closed' | 'duplicate' | 'incomplete';
 export type ResultadoAlterarProposta = PropostaPrestadorResponse | 'notFound' | 'locked';
-export type ResultadoRetirarProposta = 'ok' | 'notFound' | 'locked';
+export type ResultadoRetirarProposta = 'ok' | 'notFound' | 'locked' | { caminhosPortfolio: string[] };
 
 export interface IPropostaPrestadorRepository {
   create(orderId: string, prestadorId: string, input: CriarPropostaPrestador): Promise<ResultadoCriarProposta>;
@@ -38,18 +40,24 @@ const mensagemTravada =
 export class PropostaPrestadorService {
   constructor(
     private readonly repository: IPropostaPrestadorRepository,
-    private readonly users: IUserRepository
+    private readonly fornecedores: Pick<FornecedorService, 'getCurrent'>,
+    private readonly storage?: Pick<ArmazenamentoPortfolio, 'remover'>
   ) {}
 
   async criar(currentUser: CurrentUser, orderId: string, request: CriarPropostaPrestador): Promise<PropostaPrestadorResponse> {
     const id = getUserId(currentUser);
-    const user = await this.users.getById(id);
-    if (!user?.cpf?.trim()) {
-      throw new DomainException('Finalize o cadastro antes de enviar uma proposta.');
+    try {
+      await this.fornecedores.getCurrent(currentUser);
+    } catch (error) {
+      // Legacy providers have CPF and profile tables but no fornecedores row.
+      // Their registration and compatibility are checked inside repository.create's transaction.
+      if (!(error instanceof NotFoundException)) throw error;
     }
 
     const resultado = await this.repository.create(orderId, id, request);
     switch (resultado) {
+      case 'incomplete':
+        throw new DomainException('Finalize o cadastro antes de enviar uma proposta.');
       case 'notFound':
         throw new NotFoundException('Pedido', orderId);
       case 'closed':
@@ -85,5 +93,10 @@ export class PropostaPrestadorService {
     const resultado = await this.repository.remove(id, getUserId(currentUser));
     if (resultado === 'notFound') throw new NotFoundException('Proposta', id);
     if (resultado === 'locked') throw new ConflictException(mensagemTravada);
+    // The repository returns these paths only after the deletion transaction committed.
+    // A storage failure retains unused files for later cleanup rather than deleting live photos.
+    if (typeof resultado === 'object' && resultado.caminhosPortfolio.length) {
+      await this.storage?.remover(resultado.caminhosPortfolio).catch(() => {});
+    }
   }
 }

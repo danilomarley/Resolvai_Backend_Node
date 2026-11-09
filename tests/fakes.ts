@@ -5,6 +5,8 @@ import type {
   MensagemChat,
   RespostaAssistente,
   IContatoRepository,
+  IEspecialidadeQueries,
+  IFornecedorRepository,
   IEnderecoRepository,
   IPedidoQueries,
   IPedidoRepository,
@@ -21,8 +23,10 @@ import type { IPropostaRepository, ResultadoAceite } from '../src/application/se
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
-import type { StatusPedido } from '../src/domain/enums.js';
+import type { StatusPedido, UserRole } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
+import type { Fornecedor } from '../src/domain/fornecedor.js';
+import type { FornecedorResponse } from '../src/application/dtos/fornecedores.js';
 import { UnauthorizedException } from '../src/application/errors.js';
 
 export const usuario = (id?: string, extra: Partial<CurrentUser> = {}): CurrentUser => ({
@@ -162,8 +166,8 @@ export class FakeUsers implements IUserRepository {
     return (await this.getByEmail(email)) !== null;
   }
 
-  async existsByCpf(cpf: string, excludingUserId: string) {
-    return [...this.users.values()].some(user => user.cpf === cpf && user.id !== excludingUserId);
+  async existsByCpf(cpf: string, excludingUserId: string, role: UserRole) {
+    return [...this.users.values()].some(user => user.cpf === cpf && user.id !== excludingUserId && user.role === role);
   }
 
   async getAll() {
@@ -211,6 +215,8 @@ export class FakeContatos implements IContatoRepository {
 }
 
 export class FakeArmazenamento implements IArmazenamentoFotos {
+  readonly removidos: string[] = [];
+  async remover(caminhos: string[]) { this.removidos.push(...caminhos); }
   readonly enviados: { caminho: string; tamanho: number; contentType: string }[] = [];
   async enviar(caminho: string, conteudo: Buffer, contentType: string) {
     this.enviados.push({ caminho, tamanho: conteudo.length, contentType });
@@ -235,6 +241,11 @@ export class FakeAssistente implements IAssistentePedido {
 }
 
 export class FakeSupabase implements ISupabaseAuthClient {
+  readonly recuperacoes: { email: string; redirectTo?: string }[] = [];
+  async requestPasswordRecovery(email: string, redirectTo?: string) {
+    if (this.erro) throw this.erro;
+    this.recuperacoes.push({ email, redirectTo });
+  }
   session?: SupabaseSession;
   novoUsuario?: SupabaseAuthUser;
   erro?: Error;
@@ -244,6 +255,8 @@ export class FakeSupabase implements ISupabaseAuthClient {
     if (!this.session) throw new Error('Sessão não configurada no fake.');
     return this.session;
   }
+
+  async refreshSession() { return this.signInWithPassword(); }
 
   async signUp(email: string) {
     if (this.erro) throw this.erro;
@@ -255,12 +268,7 @@ export class FakeSupabase implements ISupabaseAuthClient {
   }
 
   readonly senhasAlteradas: { userId: string; password: string }[] = [];
-  readonly recuperacoes: string[] = [];
   recoverySession?: SupabaseSession;
-  async requestPasswordRecovery(email: string) {
-    if (this.erro) throw this.erro;
-    this.recuperacoes.push(email);
-  }
   async verifyPasswordRecovery(_email: string, token: string) {
     if (this.erro) throw this.erro;
     if (!this.recoverySession || token !== '123456') throw new UnauthorizedException('Código inválido ou expirado.');
@@ -271,5 +279,27 @@ export class FakeSupabase implements ISupabaseAuthClient {
   async updateOwnPassword(_accessToken: string, password: string) {
     if (this.erro) throw this.erro;
     this.senhasAlteradas.push({ userId: 'sessao-verificada', password });
+  }
+}
+
+export class FakeEspecialidades implements IEspecialidadeQueries {
+  async listActive() { return [{ codigo: 'eletrica', nome: 'Elétrica' }]; }
+}
+
+export class FakeFornecedores implements IFornecedorRepository {
+  readonly profiles = new Map<string, FornecedorResponse>();
+  async existsByCnpj(cnpj: string) { return [...this.profiles.values()].some(p => p.cnpj === cnpj); }
+  async getByUsuarioId(id: string) { return this.profiles.get(id) ?? null; }
+  async addComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
+    this.profiles.set(user.id, { ...fornecedor.dados, idUsuario: user.id, name: user.name, email: user.email.value,
+      cpf: user.cpf ?? undefined, tipoPessoa: fornecedor.tipoPessoa, cnpj: fornecedor.cnpj, telefone: contato.valor,
+      especialidades, bio: fornecedor.dados.bio ?? null, registroProfissional: fornecedor.dados.registroProfissional ?? null,
+      createdAt: new Date().toISOString(), updatedAt: null });
+  }
+  async updateComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
+    return this.addComplete(user, fornecedor, contato, especialidades);
+  }
+  async completeExisting(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
+    return this.addComplete(user, fornecedor, contato, especialidades);
   }
 }

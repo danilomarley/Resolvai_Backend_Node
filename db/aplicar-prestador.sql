@@ -101,5 +101,3 @@ begin
 exception when unique_violation then
     raise notice 'uq_propostas_escolhida_por_pedido não criado: há pedidos com mais de uma proposta escolhida.';
 end $$;
-
-

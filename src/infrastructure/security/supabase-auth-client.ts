@@ -1,5 +1,5 @@
 import type { ISupabaseAuthClient, SupabaseAuthUser, SupabaseSession } from '../../application/contracts.js';
-import { ConflictException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
+import { ConfiguracaoAuthException, ConflictException, ForbiddenException, MuitasTentativasException, ServicoIndisponivelException, UnauthorizedException } from '../../application/errors.js';
 import { DomainException } from '../../domain/errors.js';
 
 export interface SupabaseAuthOptions {
@@ -22,15 +22,17 @@ interface TokenResponse {
   user?: UserDto | null;
 }
 
-interface SignUpResponse extends UserDto {
-  user?: UserDto | null;
+interface RegistrationSettings {
+  disable_signup: boolean;
+  external: { email: boolean };
+  mailer_autoconfirm: boolean;
 }
 
 const guidVazio = '00000000-0000-0000-0000-000000000000';
 const timeoutMs = 100_000; // Mesmo timeout padrão do HttpClient da API C#.
 
 /**
- * Chamadas HTTP ao GoTrue (Supabase Auth): login, signup público e criação administrativa.
+ * GoTrue: login, cadastro create-if-new limitado à política do projeto e provisionamento Admin.
  */
 export class SupabaseAuthClient implements ISupabaseAuthClient {
   private readonly baseUrl: string;
@@ -46,11 +48,11 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     const response = await this.send('auth/v1/token?grant_type=password', this.options.anonKey, { email, password });
     const payload = await response.text();
 
-    if (response.status === 400 || response.status === 401) {
+    if ([400, 401, 403].includes(response.status)) {
       throw new UnauthorizedException();
     }
 
-    ensureSuccess(response, payload, 'Falha ao autenticar no Supabase.');
+    ensureSuccess(response, 'Falha ao autenticar no Supabase.');
 
     const body = deserialize<TokenResponse>(payload);
     if (!body) {
@@ -61,26 +63,79 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
   }
 
   async signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser> {
-    const response = await this.send('auth/v1/signup', this.options.anonKey, { email, password, data: { name } });
+    const settings = await this.registrationSettings();
+    let response: Response;
+    let payload: string;
+    try {
+      // Public /signup can replace the password of an existing unconfirmed user.
+      // POST admin/users only creates new users; never update/delete an existing account.
+      response = await this.send('auth/v1/admin/users', this.options.serviceRoleKey, {
+        email, password, email_confirm: settings.mailer_autoconfirm, user_metadata: { name }
+      });
+      payload = await response.text();
+    } catch {
+      return this.recoverUser(email, password, true);
+    }
+    if (isConflict(response, payload)) return this.recoverUser(email, password);
+    if (response.status >= 500) return this.recoverUser(email, password, true);
+    if (response.status === 401 || response.status === 403) throw new ConfiguracaoAuthException();
+    ensureSuccess(response, 'Falha ao registrar no Supabase Auth.');
+    const user = deserialize<UserDto>(payload);
+    if (!user || !isGuid(user.id) || user.email?.toLowerCase() !== email.toLowerCase()) {
+      return this.recoverUser(email, password, true);
+    }
+    // Admin creation sends no email. Preserve the project's existing confirmation policy.
+    if (!settings.mailer_autoconfirm) await this.resendConfirmation(email);
+    return { id: user.id.toLowerCase(), email: user.email };
+  }
+
+  private async registrationSettings(): Promise<RegistrationSettings> {
+    let settings: RegistrationSettings | null;
+    try {
+      const response = await this.send('auth/v1/settings', this.options.anonKey, undefined, 'GET');
+      if (!response.ok) throw new Error('Settings unavailable');
+      settings = deserialize<RegistrationSettings>(await response.text());
+      if (!settings || typeof settings.disable_signup !== 'boolean' || typeof settings.external?.email !== 'boolean'
+        || typeof settings.mailer_autoconfirm !== 'boolean') throw new Error('Invalid registration settings');
+    } catch {
+      throw new ServicoIndisponivelException('Não foi possível confirmar a política de cadastro do Supabase Auth. Tente novamente.');
+    }
+    if (settings.disable_signup || !settings.external.email) throw new ForbiddenException('O cadastro por e-mail está desabilitado neste projeto.');
+    return settings;
+  }
+
+  private async resendConfirmation(email: string): Promise<void> {
+    try {
+      const response = await this.send('auth/v1/resend', this.options.anonKey, { type: 'signup', email });
+      await response.text();
+      if (response.ok) return;
+    } catch { /* Keep confirmation delivery failure visible without exposing transport details. */ }
+    throw new ServicoIndisponivelException('Não foi possível enviar a confirmação de e-mail. Tente novamente com as credenciais originais.');
+  }
+
+  async refreshSession(refreshToken: string): Promise<SupabaseSession> {
+    const response = await this.send('auth/v1/token?grant_type=refresh_token', this.options.anonKey, { refresh_token: refreshToken });
     const payload = await response.text();
+    if ([400, 401, 403, 422].includes(response.status)) throw new UnauthorizedException('Sessão expirada. Entre novamente.');
+    ensureSuccess(response, 'Falha ao renovar a sessão.');
+    const body = deserialize<TokenResponse>(payload);
+    if (!body) throw new UnauthorizedException();
+    return toSession(body);
+  }
 
-    if (isConflict(response, payload)) {
-      throw new ConflictException(`Já existe um usuário com o e-mail '${email}'.`);
+  private async recoverUser(email: string, password: string, unknownCreation = false): Promise<SupabaseAuthUser> {
+    try {
+      const session = await this.signInWithPassword(email, password);
+      if (session.user.email.toLowerCase() !== email.toLowerCase()) throw new UnauthorizedException();
+      return session.user;
+    } catch (error) {
+      if (error instanceof UnauthorizedException) {
+        await this.resendConfirmation(email);
+        if (unknownCreation) throw new ServicoIndisponivelException('Resultado do cadastro não confirmado. Confirme seu e-mail e tente novamente com as credenciais originais.');
+        throw new ConflictException('Não foi possível retomar o cadastro. Confirme seu e-mail e tente novamente com as mesmas credenciais.');
+      }
+      throw error;
     }
-
-    ensureSuccess(response, payload, 'Falha ao registrar no Supabase Auth.');
-
-    const body = deserialize<SignUpResponse>(payload);
-    if (!body) {
-      throw new DomainException('Resposta inválida do Supabase Auth no signup.');
-    }
-
-    const user = body.user ?? (isGuid(body.id) ? { id: body.id, email: body.email } : null);
-    if (!user || !isGuid(user.id)) {
-      throw new DomainException('Supabase Auth não devolveu o identificador do usuário.');
-    }
-
-    return { id: user.id!.toLowerCase(), email: user.email ?? email };
   }
 
   async adminCreateUser(email: string, password: string, name: string): Promise<SupabaseAuthUser> {
@@ -96,7 +151,7 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
       throw new ConflictException(`Já existe um usuário com o e-mail '${email}'.`);
     }
 
-    ensureSuccess(response, payload, 'Falha ao criar usuário no Supabase Auth.');
+    ensureSuccess(response, 'Falha ao criar usuário no Supabase Auth.');
 
     const body = deserialize<UserDto>(payload);
     if (!body) {
@@ -110,10 +165,19 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     return { id: body.id!.toLowerCase(), email: body.email ?? email };
   }
 
-  async requestPasswordRecovery(email: string): Promise<void> {
-    const response = await this.recoveryRequest('recover', { email });
-    // O contrato de solicitação não distingue conta ausente, bloqueio ou limite do provedor.
-    if (!response.ok && ![400, 404, 422, 429].includes(response.status)) throw recoveryUnavailable();
+  async requestPasswordRecovery(email: string, redirectTo?: string): Promise<void> {
+    const path = redirectTo ? `recover?${new URLSearchParams({ redirect_to: redirectTo })}` : 'recover';
+    const response = await this.recoveryRequest(path, { email });
+    // O fluxo OTP mantém a resposta indistinguível para conta ausente, bloqueio e limite do provedor.
+    if (!redirectTo) {
+      if (!response.ok && ![400, 404, 422, 429].includes(response.status)) throw recoveryUnavailable();
+      return;
+    }
+    const payload = await response.text();
+    if (response.status === 429) throw new MuitasTentativasException();
+    const error = deserialize<{ error_code?: string; code?: string }>(payload);
+    if ([400, 404, 422].includes(response.status) && (error?.error_code ?? error?.code) === 'user_not_found') return;
+    if (!response.ok) throw recoveryUnavailable();
   }
 
   async verifyPasswordRecovery(email: string, token: string): Promise<SupabaseSession> {
@@ -146,18 +210,22 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     } catch { throw recoveryUnavailable(); }
   }
 
-  private send(path: string, key: string, body: unknown, method = 'POST'): Promise<Response> {
-    return this.fetcher(new URL(path, this.baseUrl), {
-      method,
-      headers: {
-        apikey: key,
-        Authorization: `Bearer ${key}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs)
-    });
+  private async send(path: string, key: string, body: unknown, method = 'POST'): Promise<Response> {
+    try {
+      return await this.fetcher(new URL(path, this.baseUrl), {
+        method,
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          Accept: 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch {
+      throw new ServicoIndisponivelException('Supabase Auth indisponível. Tente novamente.');
+    }
   }
 }
 
@@ -165,15 +233,17 @@ const invalidRecovery = () => new UnauthorizedException('Código inválido ou ex
 const recoveryUnavailable = () => new ServicoIndisponivelException('Não foi possível processar a recuperação de senha. Tente novamente mais tarde.');
 
 function isConflict(response: Response, payload: string): boolean {
-  return response.status === 422 || (response.status === 400 && payload.toLowerCase().includes('already'));
+  const body = deserialize<{ error_code?: string; code?: string }>(payload);
+  return [400, 422].includes(response.status) && ['user_already_exists', 'email_exists'].includes(body?.error_code ?? body?.code ?? '');
 }
 
-function ensureSuccess(response: Response, payload: string, errorMessage: string): void {
+function ensureSuccess(response: Response, errorMessage: string): void {
   if (response.ok) {
     return;
   }
 
-  throw new DomainException(`${errorMessage} Status=${response.status}. Detalhe=${truncate(payload)}`);
+  if (response.status >= 500 || response.status === 429) throw new ServicoIndisponivelException(errorMessage);
+  throw new DomainException(`${errorMessage} Status=${response.status}.`);
 }
 
 function deserialize<T>(payload: string): T | null {
@@ -182,10 +252,6 @@ function deserialize<T>(payload: string): T | null {
   } catch {
     return null;
   }
-}
-
-function truncate(value: string): string {
-  return value.length <= 300 ? value : value.slice(0, 300);
 }
 
 function isGuid(value: string | undefined | null): value is string {

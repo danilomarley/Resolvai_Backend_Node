@@ -7,7 +7,10 @@ import { criarVerificadorDeToken } from '../src/api/authentication.js';
 import { UnauthorizedException } from '../src/application/errors.js';
 import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
+import { FornecedorService } from '../src/application/services/fornecedor-service.js';
 import { AvaliacaoService } from '../src/application/services/avaliacao-service.js';
+import { PropostaFornecedorService } from '../src/application/services/proposta-fornecedor-service.js';
+import type { IPropostaFornecedorRepository } from '../src/application/dtos/propostas-fornecedor.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
@@ -21,6 +24,8 @@ import {
   FakeArmazenamento,
   FakeAssistente,
   FakeContatos,
+  FakeEspecialidades,
+  FakeFornecedores,
   FakeEnderecos,
   FakePedidoRepository,
   FakePropostaRepository,
@@ -59,16 +64,22 @@ describe('API HTTP', () => {
     queries = new FakeQueries();
     propostas = new FakePropostaRepository();
     supabase = new FakeSupabase();
+    const fornecedores = new FakeFornecedores();
+    const especialidades = new FakeEspecialidades();
+    const fornecedorService = new FornecedorService(users, fornecedores, especialidades, supabase);
     app = await buildApp({
       dependencias: {
         avaliacaoService: new AvaliacaoService({ async criar() { return 'notFound'; }, async consultar() { return undefined; }, async resumo() { return { count: 0, averageRating: null }; } }),
         userRepository: users,
-        authService: new AuthService(users, supabase),
+        authService: new AuthService(users, supabase, fornecedores),
+        fornecedorService,
+        propostaFornecedorService: new PropostaFornecedorService(fornecedorService, {} as IPropostaFornecedorRepository, new FakeArmazenamento()),
+        especialidadeQueries: especialidades,
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
         propostaService: new PropostaService(propostas, queries),
         prestadorService: new PrestadorService({ async listCategorias() { return []; } } as unknown as IPrestadorRepository, users),
-        propostaPrestadorService: new PropostaPrestadorService({} as unknown as IPropostaPrestadorRepository, users),
+        propostaPrestadorService: new PropostaPrestadorService({} as unknown as IPropostaPrestadorRepository, fornecedorService),
         fotoPedidoService: new FotoPedidoService(new FakeArmazenamento(), users),
         assistentePedidoService: new AssistentePedidoService(new FakeAssistente()),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
@@ -97,6 +108,59 @@ describe('API HTTP', () => {
     app.inject({ method: 'GET', url, headers: sub ? { authorization: `Bearer ${await token(sub)}` } : {} });
 
   describe('autenticação', () => {
+    it('conclui perfil profissional somente para a própria conta autenticada de Prestador', async () => {
+      const url = '/api/v1/fornecedores/me/complete-registration';
+      const payload = { name: 'Fornecedor Legado', tipoPessoa: 'PF', cpf: '52998224725', nomeExibicao: 'Fornecedor Legado',
+        telefone: '85999999999', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', especialidades: ['eletrica'] };
+      expect((await app.inject({ method: 'POST', url, payload })).statusCode).toBe(401);
+      expect((await app.inject({ method: 'POST', url, payload, headers: { authorization: `Bearer ${await token(clienteId)}` } })).statusCode).toBe(403);
+      const prestadorId = randomUUID();
+      await users.add(User.register(prestadorId, 'Legado', Email.create('legado-http@teste.com'), UserRole.Prestador));
+      const headers = { authorization: `Bearer ${await token(prestadorId)}` };
+      expect((await app.inject({ method: 'POST', url, payload: { ...payload, email: 'outra@teste.com' }, headers })).statusCode).toBe(400);
+      const response = await app.inject({ method: 'POST', url, payload, headers });
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toMatchObject({ idUsuario: prestadorId, tipoPessoa: 'PF', email: 'legado-http@teste.com' });
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect((await app.inject({ method: 'POST', url, payload, headers })).statusCode).toBe(409);
+    });
+    it.each(['/api/v1/auth/register-provider', '/api/v1/auth/register'])('limita cadastro por IP antes da criacao privilegiada: %s', async url => {
+      const respostas = [];
+      for (let i = 0; i < 11; i++) respostas.push(await app.inject({ method: 'POST', url, payload: {}, remoteAddress: '203.0.113.20' }));
+      expect(respostas.slice(0, 10).every(resposta => resposta.statusCode === 400)).toBe(true);
+      expect(respostas[10]?.statusCode).toBe(429);
+    });
+    it('recusa login com UUID diferente mesmo quando o email coincide', async () => {
+      supabase.session = { accessToken: 'token', tokenType: 'bearer', expiresAtUtc: new Date(), refreshToken: null,
+        user: { id: randomUUID(), email: 'maria@teste.com' } };
+      const resposta = await app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { email: 'maria@teste.com', password: 'senha' } });
+      expect(resposta.statusCode).toBe(401);
+    });
+
+    it('claims de papel sem perfil local nao concedem administracao', async () => {
+      const jwt = await new SignJWT({ role: 'Admin', email: 'sem-perfil@teste.com' })
+        .setProtectedHeader({ alg: 'HS256' }).setSubject(randomUUID()).setIssuer(issuer)
+        .setAudience('authenticated').setExpirationTime('5m').sign(new TextEncoder().encode(segredo));
+      expect((await app.inject({ method: 'GET', url: '/api/v1/users', headers: { authorization: `Bearer ${jwt}` } })).statusCode).toBe(403);
+    });
+
+    it('alteração autenticada exige Bearer e usa a sessão do sujeito verificado', async () => {
+      const payload = { newPassword: 'SenhaNova123' };
+      expect((await app.inject({ method: 'POST', url: '/api/v1/auth/change-password', payload })).statusCode).toBe(401);
+      const jwt = await token(clienteId);
+      const resposta = await app.inject({ method: 'POST', url: '/api/v1/auth/change-password', payload,
+        headers: { authorization: `Bearer ${jwt}` } });
+      expect(resposta.statusCode).toBe(200);
+      expect(supabase.senhasAlteradas.at(-1)?.userId).toBe('sessao-verificada');
+    });
+
+    it('check-email retorna a mesma resposta para conta existente e ausente', async () => {
+      const chamar = (email: string) => app.inject({ method: 'POST', url: '/api/v1/auth/check-email', payload: { email } });
+      const existente = await chamar('maria@teste.com');
+      const ausente = await chamar('ausente@teste.com');
+      expect(ausente.statusCode).toBe(200);
+      expect(ausente.json()).toEqual(existente.json());
+    });
     it('sem token responde 401 em ProblemDetails com WWW-Authenticate', async () => {
       const resposta = await get('/api/v1/home/summary');
       expect(resposta.statusCode).toBe(401);

@@ -7,6 +7,9 @@ import { jsonSchemaTransform, serializerCompiler, validatorCompiler } from 'fast
 import { type CurrentUser, type IUserRepository, usuarioAnonimo } from '../application/contracts.js';
 import type { AssistentePedidoService } from '../application/services/assistente-pedido-service.js';
 import type { AuthService } from '../application/services/auth-service.js';
+import type { IEspecialidadeQueries } from '../application/contracts.js';
+import type { FornecedorService } from '../application/services/fornecedor-service.js';
+import { fornecedoresPublicRoutes, fornecedoresRoutes } from './routes/fornecedores-routes.js';
 import { type FotoPedidoService, tamanhoMaximoFoto } from '../application/services/foto-pedido-service.js';
 import type { PedidoService } from '../application/services/pedido-service.js';
 import type { PropostaService } from '../application/services/proposta-service.js';
@@ -21,11 +24,16 @@ import { pedidosRoutes } from './routes/pedidos-routes.js';
 import { propostasRoutes } from './routes/propostas-routes.js';
 import { prestadorRoutes } from './routes/prestador-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
+import { propostasFornecedorRoutes } from './routes/propostas-fornecedor-routes.js';
+import type { PropostaFornecedorService } from '../application/services/proposta-fornecedor-service.js';
 import { avaliacoesRoutes } from './routes/avaliacoes-routes.js';
 import type { AvaliacaoService } from '../application/services/avaliacao-service.js';
 
 export interface Dependencias {
   avaliacaoService: AvaliacaoService;
+  fornecedorService: FornecedorService;
+  especialidadeQueries: IEspecialidadeQueries;
+  propostaFornecedorService: PropostaFornecedorService;
   authService: AuthService;
   userService: UserService;
   pedidoService: PedidoService;
@@ -103,7 +111,8 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
   // Uma foto por requisição, até 5 MB (POST /api/v1/orders/photos).
   await app.register(fastifyMultipart, { limits: { fileSize: tamanhoMaximoFoto, files: 1, fields: 5, parts: 6 } });
 
-  await app.register(authRoutes(dependencias.authService));
+  await app.register(authRoutes(dependencias.authService, dependencias.verificarToken, dependencias.userRepository, corsAllowedOrigins));
+  await app.register(fornecedoresPublicRoutes(dependencias.fornecedorService, dependencias.especialidadeQueries));
 
   // Protegido por padrão: tudo registrado aqui exige Bearer token válido.
   await app.register(async protegido => {
@@ -113,6 +122,8 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
     protegido.addHook('onRequest', criarHookDeAutenticacao(dependencias.verificarToken, dependencias.userRepository));
 
     await protegido.register(usersRoutes(dependencias.userService));
+    await protegido.register(fornecedoresRoutes(dependencias.fornecedorService));
+    await protegido.register(propostasFornecedorRoutes(dependencias.propostaFornecedorService));
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(propostasRoutes(dependencias.propostaService));
     await protegido.register(prestadorRoutes(dependencias.prestadorService, dependencias.propostaPrestadorService));

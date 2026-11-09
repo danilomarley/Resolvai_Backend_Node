@@ -17,7 +17,9 @@ Rode **nesta ordem** no SQL Editor do Supabase (cada script é idempotente e pod
 
 ## Cadastro
 
-`POST /api/v1/auth/register-provider` (público): igual ao cadastro do contratante, mas o perfil nasce `Prestador`. Depois do login o prestador finaliza o cadastro (`POST /api/v1/users/me/complete-registration`: CPF, endereço e contato, como o contratante) e escolhe categorias e cidades. Não há análise nem documentos nesta etapa.
+`POST /api/v1/auth/register-provider` (público) recebe o cadastro completo de fornecedor PF/PJ, documento correspondente, contato, especialidades e cidades de atuação. Cliente mantém cadastro simples em `/api/v1/auth/register`. O fornecedor nasce com papel `Prestador`; PJ usa CNPJ e pode concluir o perfil sem CPF. O corpo simples antigo não atende ao novo contrato. Consulte [cadastro profissional](PROVIDER-REGISTRATION.md).
+
+Categorias e cidades de `/provider/profile` são sincronizadas com `/fornecedores/me`. Para atualizar o banco existente, use a [migração de conciliação](CONCILIACAO-PR8.md), em vez de reaplicar indiscriminadamente os scripts históricos acima.
 
 ## Rotas do prestador
 
@@ -37,6 +39,8 @@ Todas exigem o papel `Prestador` (403 para os demais), `Cache-Control: no-store`
 ### Compatibilidade
 
 Um pedido é **compatível** com o prestador quando (1) a categoria do pedido (`escopo.categoria`) é igual, sem acento nem maiúsculas, a uma categoria do prestador **e** (2) a localização do pedido (`escopo.localizacao`) contém o nome de alguma cidade do prestador. Pedidos não compatíveis continuam no feed, sem destaque.
+
+Enviar proposta exige compatibilidade e pedido de outro usuário, aberto e sem proposta escolhida. A localização atual é textual; o raio em quilômetros não calcula distância geográfica.
 
 ### Privacidade do contratante
 

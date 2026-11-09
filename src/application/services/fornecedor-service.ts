@@ -1,0 +1,135 @@
+import { randomUUID } from 'node:crypto';
+import { Contato } from '../../domain/contato.js';
+import { Email } from '../../domain/email.js';
+import { UserRole } from '../../domain/enums.js';
+import { DomainException } from '../../domain/errors.js';
+import { Fornecedor } from '../../domain/fornecedor.js';
+import { normalizarTelefone } from '../../domain/telefone.js';
+import { User } from '../../domain/user.js';
+import type { CurrentUser, IEspecialidadeQueries, IFornecedorRepository, IOportunidadeQueries, ISupabaseAuthClient, IUserRepository } from '../contracts.js';
+import type { ListarOportunidadesQuery } from '../dtos/oportunidades.js';
+import { normalizarGuid } from '../../api/guid.js';
+import type { AtualizarFornecedorRequest, CompleteFornecedorRequest, FornecedorResponse, RegisterFornecedorRequest } from '../dtos/fornecedores.js';
+import { ConfiguracaoAuthException, ConflictException, ForbiddenException, NotFoundException, ServicoIndisponivelException, UnauthorizedException } from '../errors.js';
+
+const pendente = () => new ServicoIndisponivelException('Cadastro pendente. Confirme seu e-mail e tente novamente com os mesmos dados e credenciais.');
+
+export class FornecedorService {
+  constructor(
+    private readonly users: IUserRepository,
+    private readonly fornecedores: IFornecedorRepository,
+    private readonly especialidades: IEspecialidadeQueries,
+    private readonly auth: ISupabaseAuthClient,
+    private readonly oportunidades?: IOportunidadeQueries
+  ) {}
+
+  async register(request: RegisterFornecedorRequest): Promise<FornecedorResponse> {
+    const email = Email.create(request.email);
+    const perfil = Fornecedor.register(randomUUID(), request.tipoPessoa, request.cnpj, request);
+    User.register(perfil.idUsuario, request.name, email, UserRole.Prestador);
+    const cpf = perfil.normalizeCpf(request.cpf);
+    const telefone = normalizarTelefone(request.telefone);
+    const codigos = await this.validarEspecialidades(request.especialidades);
+    if (await this.users.existsByEmail(email)) throw new ConflictException('E-mail já cadastrado. Use uma conta distinta para cada papel.');
+    if (cpf && await this.users.existsByCpf(cpf, perfil.idUsuario, UserRole.Prestador)) throw new ConflictException('Já existe prestador com este CPF.');
+    if (perfil.cnpj && await this.fornecedores.existsByCnpj(perfil.cnpj)) throw new ConflictException('CNPJ já cadastrado.');
+
+    let identidade;
+    try {
+      identidade = await this.auth.signUp(email.value, request.password, request.name.trim());
+    } catch (error) {
+      if (error instanceof ConfiguracaoAuthException || error instanceof ConflictException || error instanceof DomainException || error instanceof UnauthorizedException || error instanceof ForbiddenException) throw error;
+      throw pendente();
+    }
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identidade.id)
+      || identidade.id === '00000000-0000-0000-0000-000000000000' || identidade.email.toLowerCase() !== email.value) {
+      throw new UnauthorizedException('Não foi possível confirmar a identidade da conta.');
+    }
+    const user = User.register(identidade.id, request.name, email, UserRole.Prestador);
+    if (cpf) user.completeRegistration(cpf);
+    const fornecedor = Fornecedor.register(user.id, perfil.tipoPessoa, perfil.cnpj, perfil.dados);
+    const contato = Contato.register(user.id, 'whatsapp', telefone, true);
+    try {
+      await this.fornecedores.addComplete(user, fornecedor, contato, codigos);
+    } catch (error) {
+      if (error instanceof ConflictException || error instanceof DomainException) throw error;
+      // Auth and SQL are separate systems. Never delete or reset an external account.
+      throw pendente();
+    }
+    const response = await this.fornecedores.getByUsuarioId(user.id);
+    if (!response) throw pendente();
+    return response;
+  }
+
+  async getCurrent(current: CurrentUser): Promise<FornecedorResponse> {
+    const user = await this.exigirPrestador(current);
+    const profile = await this.fornecedores.getByUsuarioId(user.id);
+    if (!profile) throw new NotFoundException('Fornecedor', user.id);
+    return profile;
+  }
+
+  async completeCurrent(current: CurrentUser, request: CompleteFornecedorRequest): Promise<FornecedorResponse> {
+    const user = await this.exigirPrestador(current);
+    if (await this.fornecedores.getByUsuarioId(user.id)) throw new ConflictException('Perfil profissional já cadastrado.');
+    const fornecedor = Fornecedor.register(user.id, request.tipoPessoa, request.cnpj, request);
+    if (user.cpf?.trim() && fornecedor.tipoPessoa === 'PJ') {
+      throw new ConflictException('O CPF já cadastrado não pode ser substituído por um cadastro de pessoa jurídica.');
+    }
+    const cpf = fornecedor.normalizeCpf(request.cpf ?? user.cpf);
+    if (user.cpf?.trim() && cpf !== user.cpf) throw new ConflictException('O CPF já cadastrado não pode ser alterado.');
+    const telefone = normalizarTelefone(request.telefone);
+    const codigos = await this.validarEspecialidades(request.especialidades);
+    if (cpf && await this.users.existsByCpf(cpf, user.id, UserRole.Prestador)) throw new ConflictException('Já existe prestador com este CPF.');
+    if (fornecedor.cnpj && await this.fornecedores.existsByCnpj(fornecedor.cnpj)) throw new ConflictException('CNPJ já cadastrado.');
+    user.changeName(request.name);
+    if (cpf && !user.cpf) user.completeRegistration(cpf);
+    await this.fornecedores.completeExisting(user, fornecedor, Contato.register(user.id, 'whatsapp', telefone, true), codigos);
+    return this.getCurrent(current);
+  }
+
+  async updateCurrent(current: CurrentUser, request: AtualizarFornecedorRequest): Promise<FornecedorResponse> {
+    const user = await this.exigirPrestador(current);
+    const anterior = await this.fornecedores.getByUsuarioId(user.id);
+    if (!anterior) throw new NotFoundException('Fornecedor', user.id);
+    const chave = (cidade: string) => cidade.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+    // Older clients send only the primary city. Preserve the other attended cities when this new field is omitted.
+    const cidadesAtuacao = request.cidadesAtuacao ?? anterior.cidadesAtuacao?.filter(cidade => chave(cidade) !== chave(anterior.cidadeAtuacao));
+    const fornecedor = Fornecedor.register(user.id, anterior.tipoPessoa, anterior.cnpj, { ...request, cidadesAtuacao });
+    const telefone = normalizarTelefone(request.telefone);
+    const codigos = await this.validarEspecialidades(request.especialidades);
+    user.changeName(request.name);
+    await this.fornecedores.updateComplete(user, fornecedor, Contato.register(user.id, 'whatsapp', telefone, true), codigos);
+    return this.getCurrent(current);
+  }
+
+  async listOpportunities(current: CurrentUser, query: ListarOportunidadesQuery) {
+    const profile = await this.getCurrent(current);
+    if (!this.oportunidades) throw new ServicoIndisponivelException('Oportunidades indisponíveis no momento.');
+    return this.oportunidades.list(profile.idUsuario, query);
+  }
+
+  async getOpportunity(current: CurrentUser, requestedId: string) {
+    const profile = await this.getCurrent(current);
+    const id = normalizarGuid(requestedId);
+    if (!id) throw new NotFoundException('Oportunidade', requestedId);
+    if (!this.oportunidades) throw new ServicoIndisponivelException('Oportunidades indisponíveis no momento.');
+    const opportunity = await this.oportunidades.getById(id, profile.idUsuario);
+    if (!opportunity) throw new NotFoundException('Oportunidade', id);
+    return opportunity;
+  }
+
+  private async exigirPrestador(current: CurrentUser): Promise<User> {
+    if (!current.isAuthenticated || !current.id) throw new UnauthorizedException();
+    const user = await this.users.getById(current.id);
+    if (!user || !user.isActive) throw new UnauthorizedException('Perfil de Prestador indisponível.');
+    if (user.role !== UserRole.Prestador) throw new ForbiddenException();
+    return user;
+  }
+
+  private async validarEspecialidades(values: string[]): Promise<string[]> {
+    const codigos = [...new Set(values.map(value => value.trim()))].sort();
+    const ativas = new Set((await this.especialidades.listActive()).map(item => item.codigo));
+    if (!codigos.length || codigos.some(codigo => !ativas.has(codigo))) throw new DomainException('Há especialidades inexistentes ou inativas.');
+    return codigos;
+  }
+}

@@ -5,6 +5,13 @@ export class UnauthorizedException extends Error {
   }
 }
 
+export class ForbiddenException extends Error {
+  constructor(message = 'Acesso restrito a Prestador.') {
+    super(message);
+    this.name = 'ForbiddenException';
+  }
+}
+
 export class NotFoundException extends Error {
   constructor(resource: string, key: unknown) {
     super(`${resource} '${String(key)}' não foi encontrado.`);
@@ -26,6 +33,16 @@ export class ServicoIndisponivelException extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = 'ServicoIndisponivelException';
+  }
+}
+
+/** Credencial do servidor recusada antes da criação de uma conta no Auth. */
+export class ConfiguracaoAuthException extends ServicoIndisponivelException {
+  readonly code = 'AUTH_CONFIGURATION_ERROR';
+
+  constructor() {
+    super('O cadastro está indisponível por uma falha de configuração do serviço. Entre em contato com o suporte.');
+    this.name = 'ConfiguracaoAuthException';
   }
 }
 

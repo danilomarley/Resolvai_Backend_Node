@@ -3,9 +3,12 @@ import type { Email } from '../domain/email.js';
 import type { Endereco } from '../domain/endereco.js';
 import type { StatusPedido, UserRole } from '../domain/enums.js';
 import type { User } from '../domain/user.js';
+import type { Fornecedor } from '../domain/fornecedor.js';
+import type { EspecialidadeResponse, FornecedorResponse } from './dtos/fornecedores.js';
 import type { PaginaResponse } from './dtos/common.js';
 import type { ResumoHomeResponse } from './dtos/home.js';
 import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse } from './dtos/pedidos.js';
+import type { ListarOportunidadesQuery, OportunidadeDetalhe, OportunidadesResponse } from './dtos/oportunidades.js';
 
 /**
  * Portador do Bearer token da requisição atual (equivalente ao ICurrentUser da API C#).
@@ -23,7 +26,7 @@ export interface IUserRepository {
   getById(id: string): Promise<User | null>;
   getByEmail(email: Email): Promise<User | null>;
   existsByEmail(email: Email): Promise<boolean>;
-  existsByCpf(cpf: string, excludingUserId: string): Promise<boolean>;
+  existsByCpf(cpf: string, excludingUserId: string, role: UserRole): Promise<boolean>;
   getAll(): Promise<User[]>;
   add(user: User): Promise<void>;
   update(user: User): Promise<void>;
@@ -54,6 +57,11 @@ export interface IPedidoRepository {
   add(id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]): Promise<void>;
 }
 
+export interface IOportunidadeQueries {
+  list(providerId: string, query: ListarOportunidadesQuery): Promise<OportunidadesResponse>;
+  getById(id: string, providerId: string): Promise<OportunidadeDetalhe | null>;
+}
+
 export interface SupabaseAuthUser {
   id: string;
   email: string;
@@ -68,12 +76,25 @@ export interface SupabaseSession {
 }
 
 export interface ISupabaseAuthClient {
+  requestPasswordRecovery(email: string, redirectTo?: string): Promise<void>;
+  refreshSession(refreshToken: string): Promise<SupabaseSession>;
   signInWithPassword(email: string, password: string): Promise<SupabaseSession>;
   signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
   adminCreateUser(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
-  requestPasswordRecovery(email: string): Promise<void>;
   verifyPasswordRecovery(email: string, token: string): Promise<SupabaseSession>;
   updateOwnPassword(accessToken: string, password: string): Promise<void>;
+}
+
+export interface IEspecialidadeQueries {
+  listActive(): Promise<EspecialidadeResponse[]>;
+}
+
+export interface IFornecedorRepository {
+  existsByCnpj(cnpj: string): Promise<boolean>;
+  getByUsuarioId(id: string): Promise<FornecedorResponse | null>;
+  addComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
+  completeExisting(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
+  updateComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
 }
 
 /**

@@ -74,10 +74,11 @@ export class PrestadorRepository implements IPrestadorRepository {
 
   async listCategorias(): Promise<CategoriaServico[]> {
     return this.database.query<CategoriaServico>(
-      `select id as "id", slug as "slug", nome as "name"
-         from public.categorias_servico
-        where ativo
-        order by ordem, nome;`
+      `select c.id as "id", c.slug as "slug", c.nome as "name"
+         from public.categorias_servico c
+         join public.especialidades e on e.codigo=replace(c.slug,'-','_')
+        where c.ativo and e.is_active
+        order by c.ordem,c.nome;`
     );
   }
 
@@ -101,8 +102,12 @@ export class PrestadorRepository implements IPrestadorRepository {
 
   savePerfil(prestadorId: string, categoryIds: string[], cities: string[]): Promise<'ok' | 'invalidCategory'> {
     return this.database.transaction(async sql => {
+      // The same lock is taken by the full profile editor; proposal creation takes it FOR SHARE.
+      await sql.query('select id from public.users where id=$1 for update', [prestadorId]);
       const [validas] = await sql.query<{ total: number }>(
-        'select count(*) as "total" from public.categorias_servico where ativo and id = any($1::uuid[]);',
+        `select count(*) as "total" from public.categorias_servico c
+          join public.especialidades e on e.codigo=replace(c.slug,'-','_')
+          where c.ativo and e.is_active and c.id=any($1::uuid[])`,
         [categoryIds]
       );
       if (validas?.total !== categoryIds.length) {
@@ -119,6 +124,12 @@ export class PrestadorRepository implements IPrestadorRepository {
         'insert into public.prestador_regioes (id_prestador, cidade) select $1, unnest($2::text[]) on conflict do nothing;',
         [prestadorId, cities]
       );
+      // Keep the supplier API and the existing provider API on the same professional profile.
+      await sql.query('delete from public.fornecedor_especialidades where id_usuario=$1', [prestadorId]);
+      await sql.query(`insert into public.fornecedor_especialidades(id_usuario,codigo_especialidade)
+        select $1,replace(c.slug,'-','_') from public.categorias_servico c
+          join public.fornecedores f on f.id_usuario=$1 where c.id=any($2::uuid[])`, [prestadorId, categoryIds]);
+      await sql.query('update public.fornecedores set cidade_atuacao=$2,updated_at=now() where id_usuario=$1', [prestadorId, cities[0]]);
       return 'ok';
     });
   }

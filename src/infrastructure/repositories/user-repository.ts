@@ -1,6 +1,6 @@
 import type { IUserRepository } from '../../application/contracts.js';
 import { Email } from '../../domain/email.js';
-import { parseUserRole } from '../../domain/enums.js';
+import { parseUserRole, type UserRole } from '../../domain/enums.js';
 import { User } from '../../domain/user.js';
 import type { Sql } from '../database.js';
 
@@ -47,10 +47,10 @@ export class UserRepository implements IUserRepository {
     return row?.exists ?? false;
   }
 
-  async existsByCpf(cpf: string, excludingUserId: string): Promise<boolean> {
+  async existsByCpf(cpf: string, excludingUserId: string, role: UserRole): Promise<boolean> {
     const [row] = await this.sql.query<{ exists: boolean }>(
-      'select exists (select 1 from users where cpf = $1 and id <> $2) as "exists";',
-      [cpf, excludingUserId]
+      'select exists (select 1 from users where cpf = $1 and id <> $2 and role = $3) as "exists";',
+      [cpf, excludingUserId, role]
     );
     return row?.exists ?? false;
   }

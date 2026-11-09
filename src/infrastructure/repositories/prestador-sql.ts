@@ -3,7 +3,7 @@ import type { StatusPedido, StatusProposta } from '../../domain/enums.js';
 import { statusPropostaColumn } from './proposta-sql.js';
 
 /** Compara sem acento e sem diferenciar maiúsculas (função criada pelo script 015). */
-export const norm = (expressao: string) => `public.resolvai_norm(${expressao})`;
+export const norm = (expressao: string) => `public.resolvai_norm(btrim(${expressao}))`;
 
 export const categoriaExpr = `nullif(btrim(p.escopo ->> 'categoria'), '')`;
 export const tituloExpr = `coalesce(nullif(btrim(p.escopo ->> 'titulo'), ''), ${categoriaExpr}, 'Pedido')`;
@@ -29,8 +29,10 @@ export const compativelExpr = (prestador: string) => `(
   exists (select 1
             from public.prestador_categorias pc
             join public.categorias_servico c on c.id = pc.id_categoria
+            join public.especialidades e on e.codigo=replace(c.slug,'-','_') and e.is_active
            where pc.id_prestador = ${prestador}
-             and ${norm('c.nome')} = ${norm(`(p.escopo ->> 'categoria')`)})
+             and c.ativo
+             and ${norm(`(p.escopo ->> 'categoria')`)} in (${norm('c.nome')}, ${norm('c.slug')}, ${norm('e.codigo')}))
   and exists (select 1
                 from public.prestador_regioes r
                where r.id_prestador = ${prestador}

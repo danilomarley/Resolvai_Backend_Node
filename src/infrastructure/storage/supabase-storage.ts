@@ -23,6 +23,15 @@ export class SupabaseStorage implements IArmazenamentoFotos {
     this.baseUrl = options.url.replace(/\/+$/, '');
   }
 
+  async remover(caminhos: string[]): Promise<void> {
+    if (!caminhos.length) return;
+    const response = await this.fetcher(`${this.baseUrl}/storage/v1/object/${encodeURIComponent(this.options.bucket)}`, {
+      method: 'DELETE', headers: { apikey: this.options.serviceRoleKey, Authorization: `Bearer ${this.options.serviceRoleKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefixes: caminhos }), signal: AbortSignal.timeout(timeoutMs)
+    });
+    if (!response.ok) throw new Error('Não foi possível limpar as fotos não utilizadas.');
+  }
+
   async enviar(caminho: string, conteudo: Buffer, contentType: string): Promise<string> {
     const destino = `${encodeURIComponent(this.options.bucket)}/${caminho.split('/').map(encodeURIComponent).join('/')}`;
 

@@ -18,7 +18,7 @@ import type {
   PerfilResponse,
   UserResponse
 } from '../dtos/users.js';
-import { ConflictException, NotFoundException, UnauthorizedException } from '../errors.js';
+import { ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '../errors.js';
 import { toUserResponse } from '../mappings/user-mapper.js';
 
 export class UserService {
@@ -101,13 +101,14 @@ export class UserService {
       await this.userRepository.add(user);
     }
 
+    if (user.role !== UserRole.Cliente) throw new ForbiddenException('A finalização genérica de cadastro é exclusiva de Cliente.');
     if (user.cpf?.trim()) {
       throw new ConflictException('Cadastro já finalizado.');
     }
 
     const cpf = onlyDigits(request.cpf);
 
-    if (await this.userRepository.existsByCpf(cpf, id)) {
+    if (await this.userRepository.existsByCpf(cpf, id, user.role)) {
       throw new ConflictException(`Já existe um usuário com o CPF '${request.cpf}'.`);
     }
 
@@ -153,6 +154,7 @@ export class UserService {
    */
   async updateProfile(currentUser: CurrentUser, request: AtualizarPerfilRequest): Promise<PerfilResponse> {
     const user = await this.usuarioAtual(currentUser);
+    if (user.role === UserRole.Prestador) throw new ForbiddenException('Altere o perfil profissional em /api/v1/fornecedores/me.');
 
     if ((request.endereco || request.contato) && !user.cpf?.trim()) {
       throw new DomainException('Finalize o cadastro antes de alterar endereço e contato.');

@@ -11,6 +11,8 @@ import type {
 } from '../../application/services/proposta-prestador-service.js';
 import type { Database, Sql } from '../database.js';
 import { contarPropostas } from './prestador-repository.js';
+import { caminhosDoPortfolio } from './proposta-portfolio.js';
+import { avaliarPedidoParaProposta } from './proposta-elegibilidade.js';
 import {
   norm,
   propostaPrestadorColumns,
@@ -46,8 +48,15 @@ export class PropostaPrestadorRepository implements IPropostaPrestadorRepository
         if (!pedido) {
           return 'notFound';
         }
+        const eligibility = await avaliarPedidoParaProposta(sql, orderId, prestadorId, true);
+        if (eligibility === 'incomplete') {
+          return 'incomplete';
+        }
         if (pedido.status !== 'aberto' || pedido.escolhida) {
           return 'closed';
+        }
+        if (eligibility !== 'available') {
+          return 'notFound';
         }
 
         const [existente] = await sql.query('select 1 as "ok" from public.propostas where id_pedido = $1 and id_prestador = $2;', [orderId, prestadorId]);
@@ -127,7 +136,15 @@ export class PropostaPrestadorRepository implements IPropostaPrestadorRepository
         set('prazo', textoDoPrazo(input.deadlineDays));
       }
       if (input.description !== undefined) set('descricao', input.description.trim());
-      if (input.warranty !== undefined) set('garantia', input.warranty.trim());
+      if (input.warranty !== undefined) {
+        set('garantia', input.warranty.trim());
+        // Free text from the legacy API replaces the structured warranty, not just its summary.
+        set('garantia_prazo', null);
+        set('garantia_tipo', null);
+        set('garantia_condicoes', null);
+      }
+      // Retrying the original multipart request must not silently replay an edited proposal.
+      set('payload_hash', null);
 
       await sql.query(`update public.propostas set ${sets.join(', ')} where id = $1;`, params);
       return (await buscar(sql, id, prestadorId))!;
@@ -141,8 +158,8 @@ export class PropostaPrestadorRepository implements IPropostaPrestadorRepository
         return estado;
       }
 
-      await sql.query('delete from public.propostas where id = $1;', [id]);
-      return 'ok';
+      const [removed] = await sql.query<{ portfolio: unknown }>('delete from public.propostas where id = $1 returning portfolio;', [id]);
+      return { caminhosPortfolio: caminhosDoPortfolio(removed?.portfolio, prestadorId, id) };
     });
   }
 }
@@ -159,17 +176,25 @@ async function buscar(sql: Sql, id: string, prestadorId: string) {
 
 /** Trava proposta e pedido e diz se ainda dá para alterar a proposta. */
 async function travar(sql: Sql, id: string, prestadorId: string): Promise<'notFound' | 'locked' | 'editavel'> {
+  // Acceptance and submission lock the order first; use the same order here.
+  const [pedido] = await sql.query(
+    `select p.id from public.pedidos p join public.propostas pr on pr.id_pedido=p.id
+      where pr.id=$1 and pr.id_prestador=$2 for update of p`, [id, prestadorId]
+  );
+  if (!pedido) return 'notFound';
   const [estado] = await sql.query<{ proposta: string; pedido: string }>(
     `select pr.status as "proposta", p.status as "pedido"
        from public.propostas pr
        join public.pedidos p on p.id = pr.id_pedido
       where pr.id = $1 and pr.id_prestador = $2
-        for update of pr, p;`,
+        for update of pr;`,
     [id, prestadorId]
   );
   if (!estado) {
     return 'notFound';
   }
 
-  return ['enviada', 'visualizada'].includes(estado.proposta) && estado.pedido === 'aberto' ? 'editavel' : 'locked';
+  if (!['enviada', 'visualizada'].includes(estado.proposta) || estado.pedido !== 'aberto') return 'locked';
+  const [chosen] = await sql.query('select 1 from public.propostas where id_pedido = (select id_pedido from public.propostas where id=$1) and status=\'escolhida\'', [id]);
+  return chosen ? 'locked' : 'editavel';
 }

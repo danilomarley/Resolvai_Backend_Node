@@ -1,6 +1,6 @@
 # ResolvAI: API em Node.js
 
-API do ResolvAI migrada de [Resolvai_Backend](https://github.com/danilomarley/Resolvai_Backend) (C# / ASP.NET Core). Mantém as mesmas rotas, o mesmo contrato JSON e o mesmo banco no Supabase, então o front ([Resolvai_Cliente](https://github.com/danilomarley/Resolvai_Cliente)) funciona sem alterações.
+API do ResolvAI migrada de [Resolvai_Backend](https://github.com/danilomarley/Resolvai_Backend) (C# / ASP.NET Core), com Fastify/TypeScript e o mesmo banco no Supabase. Inclui cadastro e perfil profissional; a alteração de senha exige autenticação.
 
 **Stack:** Node.js 22.12+, TypeScript, [Fastify](https://fastify.dev), [zod](https://zod.dev) (validação e OpenAPI), [pg](https://node-postgres.com) (SQL escrito à mão, como o Dapper), [jose](https://github.com/panva/jose) (JWT do Supabase) e [Vitest](https://vitest.dev).
 
@@ -71,12 +71,25 @@ tests/                 Vitest
 | --- | --- | --- |
 | POST | `/api/v1/auth/login` | público |
 | POST | `/api/v1/auth/register` | público |
-| POST | `/api/v1/auth/check-email` | público (recuperação de senha, #70) |
-| POST | `/api/v1/auth/reset-password` | público (recuperação de senha, #70) |
+| POST | `/api/v1/auth/register-provider` | público, cadastro PF/PJ |
+| POST | `/api/v1/auth/login-provider` | público, exige Prestador ativo com perfil |
+| POST | `/api/v1/auth/refresh` | refresh token, revalida perfil local ativo |
+| POST | `/api/v1/auth/check-email` | público, resposta uniforme sem revelar existência da conta |
+| POST | `/api/v1/auth/reset-password` | público, exige OTP de recuperação válido |
+| POST | `/api/v1/auth/forgot-password` | público, envia link para origem permitida |
+| POST | `/api/v1/auth/change-password` | Bearer, altera somente a senha da própria sessão |
+| GET | `/api/v1/especialidades` | público, catálogo ativo |
+| GET | `/api/v1/fornecedores/me` | Prestador ativo, próprio perfil |
+| POST | `/api/v1/fornecedores/me/complete-registration` | Prestador ativo, conclui perfil profissional da própria conta legada |
+| GET | `/api/v1/fornecedores/me/oportunidades` | Prestador ativo, pedidos abertos das próprias especialidades |
+| GET | `/api/v1/fornecedores/me/oportunidades/{id}` | Prestador ativo, detalhe de um pedido compatível e disponível |
+| POST | `/api/v1/fornecedores/me/oportunidades/{id}/propostas` | Prestador ativo, formulário multipart e até 5 fotos |
+| GET | `/api/v1/fornecedores/me/oportunidades/{id}/propostas/{proposalId}` | Prestador ativo, somente a própria proposta |
+| PATCH | `/api/v1/fornecedores/me` | Prestador ativo, próprio perfil |
 | GET | `/api/v1/users/me` | autenticado |
-| POST | `/api/v1/users/me/complete-registration` | autenticado |
+| POST | `/api/v1/users/me/complete-registration` | Cliente autenticado |
 | GET | `/api/v1/users/me/profile` | autenticado (#61) |
-| PATCH | `/api/v1/users/me/profile` | autenticado (#61) |
+| PATCH | `/api/v1/users/me/profile` | autenticado (#61); Prestador usa `/fornecedores/me` |
 | GET | `/api/v1/users` | Admin |
 | GET | `/api/v1/users/{id}` | Admin |
 | POST | `/api/v1/users` | Admin |
@@ -90,4 +103,10 @@ tests/                 Vitest
 
 Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md). Exemplos de requisição em [requests.http](requests.http). O que mudou em relação à API C# está em [docs/MIGRACAO.md](docs/MIGRACAO.md). O deploy no Render está em [docs/DEPLOY.md](docs/DEPLOY.md).
 
-A recuperação exige código enviado por e-mail pelo Supabase, validado com uso único antes de alterar a senha. Consulte [recuperação segura](docs/PASSWORD-RECOVERY.md) para o contrato, configuração do template e testes isolados. A solicitação não revela se a conta existe.
+A recuperação por código preserva `check-email` e `reset-password`: o segundo recebe `{email, token, newPassword}` e valida o OTP de uso único no Supabase. O fluxo por link usa `forgot-password` com `{email, redirectTo}` e `change-password` com Bearer e `{newPassword}`. A alteração usa a sessão verificada do usuário. Veja [recuperação segura](docs/PASSWORD-RECOVERY.md).
+
+O cadastro de Cliente permanece simples em `register`. O cadastro de fornecedor em `register-provider` exige PF/PJ, documento correspondente, contato e especialidades. O perfil aceita várias cidades atendidas. Catálogos e regiões são compartilhados com as rotas `/provider/*`; propostas exigem especialidade e cidade compatíveis.
+
+Contratos e retomada estão em [PROVIDER-REGISTRATION.md](docs/PROVIDER-REGISTRATION.md). Cadastros respeitam a política de confirmação do Auth, preservam a senha de contas pendentes e têm limites por IP.
+
+A [conciliação do PR #8](docs/CONCILIACAO-PR8.md) descreve a migração local preparada para o banco existente, sua ordem e a validação. Nenhuma migração roda automaticamente na inicialização.

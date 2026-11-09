@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { createRemoteJWKSet, decodeProtectedHeader, jwtVerify, type JWTPayload } from 'jose';
 import type { CurrentUser, IUserRepository } from '../application/contracts.js';
-import { parseUserRole, UserRole } from '../domain/enums.js';
+import { UserRole } from '../domain/enums.js';
 import { normalizarGuid } from './guid.js';
 import { enviarProblema } from './problem-details.js';
 
@@ -93,13 +93,12 @@ export function criarHookDeAutenticacao(verificarToken: VerificarToken, userRepo
     }
 
     const emailDoToken = typeof payload.email === 'string' && payload.email ? payload.email : undefined;
-    const roleDoToken = typeof payload.role === 'string' ? parseUserRole(payload.role) : undefined;
 
     request.usuario = {
       isAuthenticated: true,
       id,
       email: emailDoToken ?? user?.email.value,
-      role: user ? user.role : roleDoToken
+      role: user?.role
     };
   };
 }

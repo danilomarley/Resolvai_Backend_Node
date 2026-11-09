@@ -1,5 +1,7 @@
 import { DomainException } from '../../domain/errors.js';
-import type { CurrentUser, IUserRepository } from '../contracts.js';
+import type { CurrentUser, IFornecedorRepository, IUserRepository } from '../contracts.js';
+import type { FornecedorResponse } from '../dtos/fornecedores.js';
+import type { User } from '../../domain/user.js';
 import type { PaginaResponse } from '../dtos/common.js';
 import type {
   AtualizarPerfilPrestador,
@@ -41,7 +43,8 @@ export const normalizarTexto = (texto: string) => texto.normalize('NFD').replace
 export class PrestadorService {
   constructor(
     private readonly repository: IPrestadorRepository,
-    private readonly users: IUserRepository
+    private readonly users: IUserRepository,
+    private readonly fornecedores?: Pick<IFornecedorRepository, 'getByUsuarioId'>
   ) {}
 
   listarCategorias(): Promise<CategoriaServico[]> {
@@ -50,8 +53,10 @@ export class PrestadorService {
 
   async perfil(currentUser: CurrentUser): Promise<PerfilPrestador> {
     const id = getUserId(currentUser);
-    const [dados, usuario] = await Promise.all([this.repository.getPerfil(id), this.users.getById(id)]);
-    const registrationComplete = !!usuario?.cpf?.trim();
+    const [dados, usuario, fornecedor] = await Promise.all([
+      this.repository.getPerfil(id), this.users.getById(id), this.fornecedores?.getByUsuarioId(id)
+    ]);
+    const registrationComplete = cadastroProfissionalCompleto(usuario, fornecedor ?? null);
     return {
       ...dados,
       registrationComplete,
@@ -109,6 +114,12 @@ export class PrestadorService {
 
     return pedido;
   }
+}
+
+/** Existing PF accounts retain their CPF; new professional profiles use the corresponding PF/PJ document. */
+export function cadastroProfissionalCompleto(usuario: Pick<User, 'cpf'> | null, fornecedor: FornecedorResponse | null): boolean {
+  if (fornecedor?.tipoPessoa === 'PJ') return !!fornecedor.cnpj?.trim();
+  return !!usuario?.cpf?.trim();
 }
 
 export function getUserId(currentUser: CurrentUser): string {
