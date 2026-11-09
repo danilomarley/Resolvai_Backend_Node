@@ -29,7 +29,7 @@ export class FornecedorRepository implements IFornecedorRepository {
              u.name, u.email, u.cpf,
              coalesce((select valor from contatos where id_usuario=f.id_usuario and principal=true
                and tipo in ('telefone','whatsapp') order by id limit 1), '') as telefone,
-             array(select cidade from public.prestador_regioes where id_prestador=f.id_usuario order by cidade) as "cidadesAtuacao",
+             array[f.cidade_atuacao] as "cidadesAtuacao",
              array(select codigo_especialidade from fornecedor_especialidades where id_usuario=f.id_usuario order by codigo_especialidade) as especialidades
         from fornecedores f join users u on u.id=f.id_usuario where f.id_usuario=$1`, [id]);
     return row ? { ...row, cpf: row.cpf ?? undefined, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt?.toISOString() ?? null } : null;
@@ -47,7 +47,6 @@ export class FornecedorRepository implements IFornecedorRepository {
       [user.id, fornecedor.tipoPessoa, d.nomeExibicao, fornecedor.cnpj, d.bio, d.cidadeAtuacao, d.ufAtuacao, d.raioAtendimentoKm, d.registroProfissional]);
       await new ContatoRepository(sql).add(contato);
       await this.insertEspecialidades(sql, user.id, especialidades);
-      await this.syncPrestador(sql, user.id, especialidades, d.cidadesAtuacao ?? [d.cidadeAtuacao]);
     }));
   }
 
@@ -68,7 +67,6 @@ export class FornecedorRepository implements IFornecedorRepository {
       await this.saveContato(sql, contato);
       await sql.query('delete from fornecedor_especialidades where id_usuario=$1', [user.id]);
       await this.insertEspecialidades(sql, user.id, especialidades);
-      await this.syncPrestador(sql, user.id, especialidades, d.cidadesAtuacao ?? [d.cidadeAtuacao]);
     }));
   }
 
@@ -92,7 +90,6 @@ export class FornecedorRepository implements IFornecedorRepository {
       [user.id, fornecedor.tipoPessoa, d.nomeExibicao, fornecedor.cnpj, d.bio, d.cidadeAtuacao, d.ufAtuacao, d.raioAtendimentoKm, d.registroProfissional]);
       await this.saveContato(sql, contato);
       await this.insertEspecialidades(sql, user.id, especialidades);
-      await this.syncPrestador(sql, user.id, especialidades, d.cidadesAtuacao ?? [d.cidadeAtuacao]);
     }));
   }
 
@@ -119,21 +116,12 @@ export class FornecedorRepository implements IFornecedorRepository {
 
   private async lockEspecialidades(sql: Sql, codigos: string[]): Promise<void> {
     const ativas = await sql.query<{ codigo: string }>(`select e.codigo from public.especialidades e
-      join public.categorias_servico c on replace(c.slug, '-', '_')=e.codigo and c.ativo
-      where e.is_active and e.codigo=any($1::text[]) order by e.codigo for share of e,c`, [codigos]);
+      where e.is_active and e.codigo=any($1::text[]) order by e.codigo for share of e`, [codigos]);
     if (ativas.length !== codigos.length) throw new DomainException('Há especialidades inexistentes ou inativas.');
   }
 
   private async insertEspecialidades(sql: Sql, id: string, codigos: string[]): Promise<void> {
     await sql.query('insert into fornecedor_especialidades(id_usuario,codigo_especialidade) select $1,unnest($2::text[])', [id, codigos]);
-  }
-
-  private async syncPrestador(sql: Sql, id: string, codigos: string[], cidades: string[]): Promise<void> {
-    await sql.query('delete from public.prestador_categorias where id_prestador=$1', [id]);
-    await sql.query(`insert into public.prestador_categorias(id_prestador,id_categoria)
-      select $1,c.id from public.categorias_servico c where replace(c.slug,'-','_')=any($2::text[])`, [id, codigos]);
-    await sql.query('delete from public.prestador_regioes where id_prestador=$1', [id]);
-    await sql.query('insert into public.prestador_regioes(id_prestador,cidade) select $1,unnest($2::text[])', [id, cidades]);
   }
 
   private async translateConflict(action: () => Promise<void>): Promise<void> {

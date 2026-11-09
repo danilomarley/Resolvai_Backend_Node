@@ -178,7 +178,7 @@ Content-Type: application/json
   "name": "Paulo Eletricista", "email": "paulo@example.com", "password": "SenhaForte123",
   "tipoPessoa": "PF", "cpf": "52998224725", "nomeExibicao": "Paulo Elétrica",
   "telefone": "85999999999", "cidadeAtuacao": "Fortaleza", "ufAtuacao": "CE",
-  "cidadesAtuacao": ["Fortaleza", "Caucaia"], "especialidades": ["eletrica"]
+  "cidadesAtuacao": ["Fortaleza"], "especialidades": ["eletrica"]
 }
 
 ### Conclui perfil completo da própria conta profissional já existente
@@ -190,19 +190,19 @@ Content-Type: application/json
   "name": "Paulo Eletricista", "tipoPessoa": "PF", "cpf": "52998224725",
   "nomeExibicao": "Paulo Elétrica", "telefone": "85999999999",
   "cidadeAtuacao": "Fortaleza", "ufAtuacao": "CE",
-  "cidadesAtuacao": ["Fortaleza", "Caucaia"], "especialidades": ["eletrica"]
+  "cidadesAtuacao": ["Fortaleza"], "especialidades": ["eletrica"]
 }
 
 ### Categorias de serviço
 GET {{host}}/api/v1/catalog/categories
 Authorization: Bearer {{token}}
 
-### Define categorias e cidades de atuação
+### Define especialidades por código e uma cidade principal de atuação
 PUT {{host}}/api/v1/provider/profile
 Authorization: Bearer {{token}}
 Content-Type: application/json
 
-{ "categoryIds": ["00000000-0000-0000-0000-000000000000"], "cities": ["Fortaleza"] }
+{ "categoryIds": ["eletrica"], "cities": ["Fortaleza"] }
 
 ### Feed de pedidos abertos (compatíveis primeiro)
 GET {{host}}/api/v1/provider/orders?compatible=true&page=1

@@ -861,6 +861,10 @@ describe('Integração com PostgreSQL', () => {
           ('${u.pietra}', 'Pietra Sem Cadastro', 'pietra@exemplo.com', 'Prestador', null),
           ('${u.pedro}', 'Pedro Pintor', 'pedro.pintor@exemplo.com', 'Prestador', '81000000013');
 
+        insert into fornecedores(id_usuario,tipo_pessoa,nome_exibicao,cidade_atuacao,uf_atuacao) values
+          ('${u.paulo}','PF','Paulo Eletricista','Quixadá','CE'),
+          ('${u.pedro}','PF','Pedro Pintor','Quixadá','CE');
+
         insert into pedidos (id, id_cliente, escopo, status, data_criacao) values
           ('${o(1)}', '${u.maria}', ${escopo('Tomada sem energia', 'Elétrica', 'Centro, Quixadá', ',"urgencia":"Urgente","detalhes":"Apartamento no 2º andar","especificacoes":"Trocar a tomada"')}, 'aberto', now() - interval '1 hour'),
           ('${o(2)}', '${u.maria}', ${escopo('Pintar a sala', 'Pintura', 'Planalto, Quixadá')}, 'aberto', now() - interval '2 hours'),
@@ -879,14 +883,16 @@ describe('Integração com PostgreSQL', () => {
 
     const login = (sub: string) => sub;
 
-    it('o catálogo de categorias vem do script 015 e serve a qualquer usuário autenticado', async () => {
+    it('o catálogo usa as especialidades existentes e seus códigos, para qualquer usuário autenticado', async () => {
       const resposta = await chamar('GET', '/api/v1/catalog/categories', u.maria);
       expect(resposta.statusCode).toBe(200);
       const categorias = resposta.json() as { id: string; slug: string; name: string }[];
-      expect(categorias.length).toBeGreaterThanOrEqual(15);
+      expect(categorias.length).toBeGreaterThanOrEqual(6);
       expect(categorias.map(c => c.name)).toEqual(expect.arrayContaining(['Elétrica', 'Hidráulica', 'Pintura', 'Impermeabilização']));
       eletrica = categorias.find(c => c.slug === 'eletrica')!.id;
       pintura = categorias.find(c => c.slug === 'pintura')!.id;
+      expect(eletrica).toBe('eletrica');
+      expect(pintura).toBe('pintura');
       expect((await app.inject({ method: 'GET', url: '/api/v1/catalog/categories' })).statusCode).toBe(401);
     });
 
@@ -912,23 +918,25 @@ describe('Integração com PostgreSQL', () => {
 
     it('perfil começa vazio e só fica completo com cadastro finalizado, categoria e cidade', async () => {
       expect((await corpoDe(chamar('GET', '/api/v1/provider/profile', login(u.paulo))))).toEqual({
-        categories: [], cities: [], registrationComplete: true, onboardingComplete: false
+        categories: [], cities: ['Quixadá'], registrationComplete: true, onboardingComplete: false
       });
       expect((await corpoDe(chamar('GET', '/api/v1/provider/profile', u.pietra)))).toMatchObject({ registrationComplete: false, onboardingComplete: false });
     });
 
-    it('PUT do perfil substitui categorias e cidades, ignora cidade repetida e valida entradas', async () => {
-      const resposta = await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [eletrica, pintura, eletrica], cities: ['Quixadá', '  quixada ', 'Maracanaú'] });
+    it('PUT substitui especialidades e a cidade principal, recusa múltiplas cidades e valida entradas', async () => {
+      const resposta = await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [eletrica, pintura, eletrica], cities: ['Quixadá'] });
       expect(resposta.statusCode).toBe(200);
-      expect(resposta.json()).toMatchObject({ cities: ['Maracanaú', 'Quixadá'], registrationComplete: true, onboardingComplete: true });
+      expect(resposta.json()).toMatchObject({ cities: ['Quixadá'], registrationComplete: true, onboardingComplete: true });
       expect(resposta.json().categories.map((c: { slug: string }) => c.slug)).toEqual(['eletrica', 'pintura']);
 
       expect((await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [randomUUID()], cities: ['Fortaleza'] })).statusCode).toBe(400);
       expect((await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [], cities: [] })).statusCode).toBe(400);
       expect((await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [eletrica], cities: ['x'] })).statusCode).toBe(400);
-      // Pietra não finalizou o cadastro: escolher áreas não completa o onboarding.
+      expect((await chamar('PUT', '/api/v1/provider/profile', u.paulo, { categoryIds: [eletrica], cities: ['Quixadá', 'Fortaleza'] })).statusCode).toBe(400);
+      // A conta sem perfil precisa concluir o cadastro profissional antes de escolher áreas.
       const pietra = await chamar('PUT', '/api/v1/provider/profile', u.pietra, { categoryIds: [eletrica], cities: ['Quixadá'] });
-      expect(pietra.json()).toMatchObject({ registrationComplete: false, onboardingComplete: false });
+      expect(pietra.statusCode).toBe(400);
+      expect(pietra.json().detail).toContain('Finalize o cadastro profissional');
       // Pedro, na pintura de Quixadá, fica fora dos pedidos de elétrica.
       await chamar('PUT', '/api/v1/provider/profile', u.pedro, { categoryIds: [pintura], cities: ['Quixadá'] });
     });
@@ -1142,13 +1150,13 @@ describe('Integração com PostgreSQL', () => {
       await expect(pglite.exec(`insert into propostas (id_pedido, id_prestador, status, valor) values ('${o(1)}', '${u.pietra}', 'escolhida', 1)`)).rejects.toThrow(/uq_propostas_escolhida_por_pedido/);
     });
 
-    it('os scripts 015, 016 e 017 podem ser reaplicados sem erro e sem perder dados', async () => {
+    it('o script de unicidade pode ser reaplicado sem recriar catálogos ou perder o perfil', async () => {
       const pasta = join(import.meta.dirname, '..', 'db', 'scripts');
-      for (const arquivo of ['015_create_categorias_servico.sql', '016_create_perfil_prestador.sql', '017_alter_propostas_status_e_unicidade.sql']) {
+      for (const arquivo of ['017_alter_propostas_status_e_unicidade.sql']) {
         await pglite.exec(readFileSync(join(pasta, arquivo), 'utf8'));
       }
-      expect((await pglite.query<{ n: number }>('select count(*)::int as n from categorias_servico')).rows[0]!.n).toBeGreaterThanOrEqual(15);
-      expect((await corpoDe(chamar('GET', '/api/v1/provider/profile', u.paulo))).cities).toEqual(['Maracanaú', 'Quixadá']);
+      expect((await pglite.query<{ n: number }>('select count(*)::int as n from especialidades')).rows[0]!.n).toBeGreaterThanOrEqual(6);
+      expect((await corpoDe(chamar('GET', '/api/v1/provider/profile', u.paulo))).cities).toEqual(['Quixadá']);
     });
   });
 
@@ -1169,12 +1177,7 @@ describe('Integração com PostgreSQL', () => {
         await database.query(`insert into fornecedores(id_usuario,tipo_pessoa,nome_exibicao,cidade_atuacao,uf_atuacao) values($1,'PF','Teste','Fortaleza','CE')`, [id]);
       }
       await database.query("insert into especialidades(codigo,nome,is_active) values('op_inativa','OP inativa',false)");
-      await database.query("insert into categorias_servico(slug,nome,ativo) values('op-inativa','OP inativa',true)");
       await database.query(`insert into fornecedor_especialidades(id_usuario,codigo_especialidade) values ($1,'eletrica'),($1,'hidraulica'),($1,'op_inativa'),($2,'pintura'),($3,'eletrica')`, [provider, otherProvider, inactiveProvider]);
-      for (const id of [provider, otherProvider, inactiveProvider]) {
-        await database.query(`insert into prestador_categorias(id_prestador,id_categoria) select $1,c.id from categorias_servico c join fornecedor_especialidades fe on fe.codigo_especialidade=replace(c.slug,'-','_') where fe.id_usuario=$1`, [id]);
-        await database.query("insert into prestador_regioes(id_prestador,cidade) values($1,'Fortaleza')", [id]);
-      }
       const categories = ['Elétrica', 'eletrica', '  ELÉTRICA  ', 'HIDRAULICA', 'Pintura', 'Reformas', 'Elétrica', 'Elétrica', 'Elétrica', 'OP inativa', null, 'Elétrica'];
       for (let index = 0; index < categories.length; index++) {
         const scope = { titulo: `OP-TEST ${index}`, categoria: categories[index], localizacao: index === 5 ? 'Cidade distante, SP' : 'Fortaleza, CE', descricao: 'Descrição real', detalhes: 'Detalhes reais', especificacoes: 'Especificações reais', urgencia: 'Urgente', segredoInterno: 'não expor' };
@@ -1243,11 +1246,9 @@ describe('Integração com PostgreSQL', () => {
 
     it('retorna vazio e reavalia imediatamente especialidades alteradas ou desativadas', async () => {
       await database.query('delete from fornecedor_especialidades where id_usuario=$1', [otherProvider]);
-      await database.query('delete from prestador_categorias where id_prestador=$1', [otherProvider]);
       const empty = (await chamar('GET', `${feed}${search}`, otherProvider)).json();
       expect(empty).toMatchObject({ items: [], totalItems: 0, totalPages: 0, specialties: [] });
       await database.query("insert into fornecedor_especialidades(id_usuario,codigo_especialidade) values($1,'hidraulica')", [otherProvider]);
-      await database.query("insert into prestador_categorias(id_prestador,id_categoria) select $1,id from categorias_servico where slug='hidraulica'", [otherProvider]);
       expect((await chamar('GET', `${feed}${search}`, otherProvider)).json().items.map((item: { id: string }) => item.id)).toEqual([orderIds[3]]);
       // A specialty specific to this fixture can be disabled without affecting other tests.
       await database.query("update especialidades set is_active=true where codigo='op_inativa'");
@@ -1285,8 +1286,6 @@ describe('Integração com PostgreSQL', () => {
         await database.query(`insert into users(id,name,email,role,cpf) values($1,'Proponente',$2,'Prestador',$3)`, [id, `proponente${index}@test.invalid`, `9000000000${index}`]);
         await database.query(`insert into fornecedores(id_usuario,tipo_pessoa,nome_exibicao,cidade_atuacao,uf_atuacao) values($1,'PF','Teste','Fortaleza','CE')`, [id]);
         await database.query(`insert into fornecedor_especialidades(id_usuario,codigo_especialidade) values($1,'eletrica')`, [id]);
-        await database.query("insert into prestador_categorias(id_prestador,id_categoria) select $1,id from categorias_servico where slug='eletrica'", [id]);
-        await database.query("insert into prestador_regioes(id_prestador,cidade) values($1,'Fortaleza')", [id]);
       }
       for (const id of [orderId, closedId, mismatchedId]) {
         await database.query(`insert into pedidos(id,id_cliente,escopo,status) values($1,$2,$3::jsonb,$4)`, [id, ids.cliente,

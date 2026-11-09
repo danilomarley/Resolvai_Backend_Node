@@ -2,6 +2,8 @@
 
 Integração local de `feat/migrar-fornecedor` (`b2ea012`) com `main` (`07eed23`).
 
+Atualização em `feature/ajustar-cadastro-fornecedor`: o backend prioriza o modelo já existente de fornecedor. `categorias_servico`, `prestador_categorias` e `prestador_regioes` deixaram de ser dependências e foram retiradas dos scripts de criação. O catálogo é `especialidades`, os vínculos são `fornecedor_especialidades` e a cidade principal está em `fornecedores.cidade_atuacao`.
+
 ## Contratos finais
 
 | Operação | Resultado |
@@ -12,9 +14,9 @@ Integração local de `feat/migrar-fornecedor` (`b2ea012`) com `main` (`07eed23`
 | `POST /api/v1/auth/reset-password` | Recuperação por OTP: `{email, token, newPassword}`. Código verificado antes da alteração. |
 | `POST /api/v1/auth/forgot-password` | Recuperação por link: `{email, redirectTo}`. Origem autorizada e caminho `/redefinir-senha`. |
 | `POST /api/v1/auth/change-password` | Bearer verificado e `{newPassword}`; alteração com a própria sessão, sem operação administrativa. |
-| `/api/v1/fornecedores/me` | Perfil PF/PJ com `cidadesAtuacao`, mantendo cidade principal, UF e raio. |
+| `/api/v1/fornecedores/me` | Perfil PF/PJ com uma cidade principal, UF e raio; `cidadesAtuacao` contém apenas essa cidade. |
 | `POST /api/v1/fornecedores/me/complete-registration` | Conclusão completa da própria conta profissional já existente, com Bearer, sem criar outra identidade ou trocar credenciais. |
-| `/api/v1/provider/profile` | Categorias e cidades sincronizadas com o mesmo perfil profissional. PJ com CNPJ pode concluir o perfil sem CPF. |
+| `/api/v1/provider/profile` | Especialidades por código e exatamente uma cidade principal, diretamente no modelo de fornecedor. PJ com CNPJ pode concluir o perfil sem CPF. |
 | Propostas de fornecedor/prestador | Duas entradas HTTP, regras compartilhadas: especialidade e cidade compatíveis, pedido aberto, sem proposta escolhida e de outro usuário. |
 | Propostas do cliente | Consulta, ordenação, detalhe e aceite preservados, incluindo `NotChosen` para as demais propostas. |
 
@@ -22,9 +24,9 @@ O cadastro/login profissional mantém o papel interno `Prestador`. CPF é obriga
 
 Contas profissionais antigas sem registro em `fornecedores` podem concluir o perfil pela rota autenticada acima. O corpo contém os dados profissionais do cadastro completo, sem `email`, `password` ou UUID alvo. CPF já cadastrado é preservado; documento divergente ou perfil já existente retorna 409. Não há criação ou alteração de conta no Auth nesse fluxo.
 
-`cidadesAtuacao` é opcional nos corpos antigos; a cidade principal integra a lista. Alterações em qualquer uma das duas APIs profissionais atualizam categorias/especialidades e cidades na mesma transação.
+`cidadesAtuacao` é opcional para compatibilidade; quando informada, deve conter somente a mesma cidade de `cidadeAtuacao`. `cities` de `/provider/profile` deve conter exatamente uma cidade. Alterações nas duas APIs profissionais atualizam o mesmo registro de fornecedor e seus vínculos de especialidades, na mesma transação. Categorias de `/catalog/categories` usam código textual como `id`; `categoryIds` não recebe mais UUIDs.
 
-Pedidos armazenam localização textual. A compatibilidade regional compara cidades atendidas, ignorando acentos e maiúsculas; não calcula distância geográfica pelo raio em quilômetros. UF e raio permanecem no perfil.
+Pedidos armazenam localização textual. A compatibilidade regional compara a cidade principal, ignorando acentos e maiúsculas; não calcula distância geográfica pelo raio em quilômetros. UF e raio permanecem no perfil.
 
 ## Propostas e dados antigos
 
@@ -40,7 +42,7 @@ A consulta de metadados no projeto Supabase `ResolvAi - database` confirmou:
 
 - `fornecedores`, `especialidades`, `fornecedor_especialidades`, campos estendidos de propostas e `UNIQUE(cpf, role)` já existem.
 - O histórico registra `20261108175920_expand_propostas_form`.
-- Ainda faltam avaliações, categorias/regiões da main, `prazo_dias`, `nao_escolhida` e os índices de unicidade de propostas.
+- Ainda faltam avaliações, `prazo_dias`, `nao_escolhida` e os índices de unicidade de propostas. As antigas tabelas paralelas de categorias/regiões não são mais necessárias.
 - A consulta agregada não encontrou pares pedido/prestador duplicados nem pedidos com várias propostas escolhidas.
 
 A consulta foi somente leitura. A migração preparada localmente é:
@@ -49,7 +51,7 @@ A consulta foi somente leitura. A migração preparada localmente é:
 
 O arquivo `supabase/migrations/20261108175920_expand_propostas_form.sql` recupera a migração já registrada no histórico remoto, com o SQL original. Ele alinha o histórico local e não deve ser reaplicado manualmente no banco existente. A conciliação é a próxima migração.
 
-Ela acrescenta os requisitos ausentes, preenche projeções de catálogo/cidades preservando os dados e converte prazos textuais reconhecidos para dias. Usa transação e operações repetíveis. Duplicidades que surgirem antes da aplicação fazem a migração falhar e reverter, preservando os registros para análise.
+Ela acrescenta os requisitos ausentes de avaliações/propostas e converte prazos textuais reconhecidos para dias, preservando os dados. Não cria catálogos/vínculos/regiões paralelos, não faz cópia de especialidades entre tabelas e não altera o cadastro de cidades. Usa transação e operações repetíveis. Duplicidades que surgirem antes da aplicação fazem a migração falhar e reverter, preservando os registros para análise. Login, perfil e oportunidades foram testados no schema atual sem essa migração.
 
 Antes de publicar, conferir novamente o schema/histórico e aplicar esta migração pelo processo de banco adotado pelo projeto. Não reaplicar em massa os scripts históricos 013–016. A API não executa SQL de migração na inicialização.
 
@@ -67,7 +69,7 @@ Os testes usam PostgreSQL PGlite isolado e Auth/Storage sintéticos. Cobrem evol
 
 | Verificação local | Resultado |
 | --- | --- |
-| `npm.cmd test` | 218 testes aprovados, zero falhas. |
+| `npm.cmd test` | 219 testes aprovados, zero falhas após a unificação no modelo de fornecedor. |
 | `npm.cmd run typecheck` | Aprovado. |
 | `npm.cmd run build` | Aprovado. |
 

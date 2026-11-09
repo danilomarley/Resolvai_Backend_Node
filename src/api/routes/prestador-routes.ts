@@ -35,7 +35,7 @@ export function prestadorRoutes(prestadorService: PrestadorService, propostaServ
     rotas.get('/api/v1/catalog/categories', {
       schema: {
         tags: ['Prestador'],
-        summary: 'Catálogo de categorias de serviço (script 015).',
+        summary: 'Catálogo baseado nas especialidades ativas; id é o código da especialidade.',
         response: { 200: z.array(categoriaServicoSchema) }
       },
       handler: (_request, reply) => {
@@ -48,7 +48,7 @@ export function prestadorRoutes(prestadorService: PrestadorService, propostaServ
       ...protegido,
       schema: {
         tags: tag,
-        summary: 'Perfil profissional: categorias, cidades e situação do cadastro.',
+        summary: 'Perfil profissional: especialidades, cidade principal e situação do cadastro.',
         response: { 200: perfilPrestadorResponseSchema }
       },
       handler: (request, reply) => {
@@ -61,8 +61,8 @@ export function prestadorRoutes(prestadorService: PrestadorService, propostaServ
       ...protegido,
       schema: {
         tags: tag,
-        summary: 'Define as categorias e as cidades de atuação (substitui as anteriores).',
-        description: 'Ao menos uma categoria do catálogo e uma cidade. Isso define quais pedidos aparecem como compatíveis no feed.',
+        summary: 'Define as especialidades e a cidade principal de atuação.',
+        description: 'categoryIds recebe códigos do catálogo, como eletrica; cities contém exatamente uma cidade. Exige perfil profissional em fornecedores.',
         body: atualizarPerfilPrestadorSchema,
         response: { 200: perfilPrestadorResponseSchema }
       },

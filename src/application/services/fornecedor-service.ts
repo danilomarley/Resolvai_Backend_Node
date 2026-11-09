@@ -91,10 +91,7 @@ export class FornecedorService {
     const user = await this.exigirPrestador(current);
     const anterior = await this.fornecedores.getByUsuarioId(user.id);
     if (!anterior) throw new NotFoundException('Fornecedor', user.id);
-    const chave = (cidade: string) => cidade.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
-    // Older clients send only the primary city. Preserve the other attended cities when this new field is omitted.
-    const cidadesAtuacao = request.cidadesAtuacao ?? anterior.cidadesAtuacao?.filter(cidade => chave(cidade) !== chave(anterior.cidadeAtuacao));
-    const fornecedor = Fornecedor.register(user.id, anterior.tipoPessoa, anterior.cnpj, { ...request, cidadesAtuacao });
+    const fornecedor = Fornecedor.register(user.id, anterior.tipoPessoa, anterior.cnpj, request);
     const telefone = normalizarTelefone(request.telefone);
     const codigos = await this.validarEspecialidades(request.especialidades);
     user.changeName(request.name);
