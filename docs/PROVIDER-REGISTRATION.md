@@ -27,7 +27,7 @@ O cadastro profissional mantém os campos do C#:
 | `cnpj` | PJ: CNPJ válido numérico ou alfanumérico; PF: ausente ou nulo |
 | `telefone` | DDD e 10 ou 11 dígitos; aceita pontuação usual, persiste somente dígitos |
 | `cidadeAtuacao`, `ufAtuacao` | Cidade obrigatória até 120 caracteres; UF brasileira, normalizada para maiúsculas |
-| `cidadesAtuacao` | Lista opcional de cidades atendidas, incluindo a principal; normaliza espaços e remove repetições sem diferença de acentos/maiúsculas |
+| `cidadesAtuacao` | Compatibilidade: lista opcional com exatamente uma cidade, equivalente a `cidadeAtuacao`; outra cidade ou várias cidades retornam 400 |
 | `raioAtendimentoKm` | Inteiro de 1 a 200; padrão 20 no cadastro |
 | `bio`, `registroProfissional` | Opcionais, aceitam nulo; até 360 e 80 caracteres |
 | `especialidades` | De 1 a 100 códigos existentes e ativos; remove repetições e ordena |
@@ -64,7 +64,7 @@ As rotas públicas de cadastro Cliente e Prestador têm limite de 10 tentativas 
 
 As tabelas profissionais e `UNIQUE(cpf, role)` já existem no banco remoto. `013_create_fornecedores.sql`, `014_create_especialidades_fornecedor.sql` e `015_users_cpf_por_papel.sql` são referências versionadas para reconstrução isolada; não devem ser reaplicadas no Supabase existente. O número 012 continua reservado ao bucket de pedidos. Nenhum script é executado automaticamente pela API.
 
-A migração em `supabase/migrations/20261109014627_reconcile_fornecedor_prestador.sql` concilia os requisitos da main e preenche os vínculos profissionais existentes. Categorias/especialidades e cidades das duas APIs são sincronizadas nas transações de cadastro/edição. Consulte [a ordem e os cuidados de aplicação](CONCILIACAO-PR8.md).
+As duas APIs profissionais leem e editam diretamente `fornecedores`, `especialidades` e `fornecedor_especialidades`. Não existem catálogos/vínculos paralelos nem tabela adicional de regiões. A cidade de atendimento vem exclusivamente de `fornecedores.cidade_atuacao`; o formato de lista das respostas contém apenas essa cidade. Login, cadastro, edição e oportunidades funcionam com esse schema já existente. A migração pendente complementa avaliações e propostas, sem recriar os modelos removidos. Consulte [a ordem e os cuidados de aplicação](CONCILIACAO-PR8.md).
 
 As tabelas profissionais têm RLS e privilégios diretos de `anon`/`authenticated` revogados; a aplicação faz a autorização pelo UUID, papel e conta local ativa antes de usar o repositório SQL do servidor.
 

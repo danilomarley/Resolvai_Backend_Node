@@ -49,17 +49,14 @@ describe('Compatibilidade entre propostas do cliente, fornecedor e prestador', (
     }
     await database.query("insert into users(id,name,email,role) values($1,'Cliente','cross-customer@example.invalid','Cliente')", [customerId]);
     const profiles = new FornecedorRepository(database);
-    for (const [id, type] of [[pf, 'PF'], [pj, 'PJ']] as const) {
+    for (const [id, type] of [[pf, 'PF'], [pj, 'PJ'], [legacy, 'PF']] as const) {
       const user = User.register(id, `Fornecedor ${type}`, Email.create(`${id}@example.invalid`), 'Prestador');
-      if (type === 'PF') user.completeRegistration('52998224725');
+      if (type === 'PF') user.completeRegistration(id === legacy ? '11144477735' : '52998224725');
       const profile = Fornecedor.register(id, type, type === 'PJ' ? '11222333000181' : null, {
         nomeExibicao: user.name, cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', raioAtendimentoKm: 20
       });
       await profiles.addComplete(user, profile, Contato.register(id, 'whatsapp', '85999990000', true), ['eletrica']);
     }
-    await database.query("insert into users(id,name,email,role,cpf) values($1,'Legado','legacy-cross@example.invalid','Prestador','11144477735')", [legacy]);
-    await database.query("insert into prestador_categorias(id_prestador,id_categoria) select $1,id from categorias_servico where slug='eletrica'", [legacy]);
-    await database.query("insert into prestador_regioes(id_prestador,cidade) values($1,'Fortaleza')", [legacy]);
     fornecedores = new PropostaFornecedorRepository(database);
     prestadores = new PropostaPrestadorRepository(database);
     clientes = new PropostaRepository(database);
@@ -105,7 +102,7 @@ describe('Compatibilidade entre propostas do cliente, fornecedor e prestador', (
     expect(await prestadores.create(orderId, pf, json)).toBe('duplicate');
   });
 
-  it('aceita PJ sem CPF e prestador legado com perfil completo pela API JSON', async () => {
+  it('aceita PJ sem CPF e PF com perfil canônico completo pela API JSON', async () => {
     expect(await prestadores.create(await order(), pj, json)).toMatchObject({ status: 'Sent', value: 150 });
     expect(await prestadores.create(await order(), legacy, json)).toMatchObject({ status: 'Sent' });
   });
@@ -114,8 +111,6 @@ describe('Compatibilidade entre propostas do cliente, fornecedor e prestador', (
     const incomplete = randomUUID();
     const orderId = await order();
     await database.query("insert into users(id,name,email,role) values($1,'Incompleto',$2,'Prestador')", [incomplete, `${incomplete}@example.invalid`]);
-    await database.query("insert into prestador_categorias(id_prestador,id_categoria) select $1,id from categorias_servico where slug='eletrica'", [incomplete]);
-    await database.query("insert into prestador_regioes(id_prestador,cidade) values($1,'Fortaleza')", [incomplete]);
     expect(await prestadores.create(orderId, incomplete, json)).toBe('incomplete');
     const service = new PropostaPrestadorService(prestadores, {
       getCurrent: async () => { throw new NotFoundException('Fornecedor', incomplete); }
@@ -133,7 +128,7 @@ describe('Compatibilidade entre propostas do cliente, fornecedor e prestador', (
       expect(await prestadores.create(orderId, pf, json)).toBe(patch.status ? 'closed' : 'notFound');
     }
     const orderId = await order();
-    await database.query('delete from prestador_regioes where id_prestador=$1', [legacy]);
+    await database.query("update fornecedores set cidade_atuacao='Recife' where id_usuario=$1", [legacy]);
     expect(await prestadores.create(orderId, legacy, json)).toBe('notFound');
   });
 

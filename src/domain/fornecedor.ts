@@ -44,7 +44,7 @@ export class Fornecedor {
       const chave = cidade.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
       if (!cidades.has(chave)) cidades.set(chave, cidade);
     }
-    if (cidades.size > 30) throw new DomainException('Informe no máximo 30 cidades de atuação.');
+    if (cidades.size > 1) throw new DomainException('Informe somente a cidade principal de atuação.');
     return new Fornecedor(idUsuario, tipoPessoa, documento, {
       ...dados, nomeExibicao: dados.nomeExibicao.trim(), cidadeAtuacao: dados.cidadeAtuacao.trim(), cidadesAtuacao: [...cidades.values()], ufAtuacao, bio, registroProfissional
     });

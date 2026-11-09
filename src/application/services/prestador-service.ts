@@ -27,14 +27,14 @@ export interface FiltroFeed {
 export interface IPrestadorRepository {
   listCategorias(): Promise<CategoriaServico[]>;
   getPerfil(prestadorId: string): Promise<Pick<PerfilPrestador, 'categories' | 'cities'>>;
-  savePerfil(prestadorId: string, categoryIds: string[], cities: string[]): Promise<'ok' | 'invalidCategory'>;
+  savePerfil(prestadorId: string, categoryIds: string[], cities: string[]): Promise<'ok' | 'invalidCategory' | 'incomplete'>;
   getResumo(prestadorId: string): Promise<ResumoPrestador>;
   listFeed(prestadorId: string, filtro: FiltroFeed, page: number, pageSize: number): Promise<PaginaResponse<PedidoFeedItem>>;
   /** null quando o pedido não existe ou o prestador não pode vê-lo. */
   getPedido(prestadorId: string, orderId: string): Promise<PedidoPrestadorResponse | null>;
 }
 
-/** Minúsculas e sem acento, como public.resolvai_norm no banco. */
+/** Minúsculas e sem acento, compatível com a normalização das consultas SQL. */
 export const normalizarTexto = (texto: string) => texto.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
 
 /**
@@ -79,7 +79,10 @@ export class PrestadorService {
       });
     const categoryIds = [...new Set(request.categoryIds.map(item => item.toLowerCase()))];
 
-    if ((await this.repository.savePerfil(id, categoryIds, cities)) === 'invalidCategory') {
+    if (cities.length !== 1) throw new DomainException('Informe somente a cidade principal de atuação.');
+    const result = await this.repository.savePerfil(id, categoryIds, cities);
+    if (result === 'incomplete') throw new DomainException('Finalize o cadastro profissional antes de editar as especialidades e a cidade.');
+    if (result === 'invalidCategory') {
       throw new DomainException('Escolha apenas categorias disponíveis no catálogo.');
     }
 
@@ -118,6 +121,7 @@ export class PrestadorService {
 
 /** Existing PF accounts retain their CPF; new professional profiles use the corresponding PF/PJ document. */
 export function cadastroProfissionalCompleto(usuario: Pick<User, 'cpf'> | null, fornecedor: FornecedorResponse | null): boolean {
+  if (!fornecedor) return false;
   if (fornecedor?.tipoPessoa === 'PJ') return !!fornecedor.cnpj?.trim();
   return !!usuario?.cpf?.trim();
 }

@@ -13,7 +13,7 @@ do fornecedor. A comparação ignora maiúsculas, acentos e espaços externos;
 códigos com `_` também podem corresponder ao nome com espaços. A comparação é
 de categoria inteira, sem inferir que uma categoria genérica como `Reformas`
 equivale a Elétrica, Alvenaria ou outra especialidade. A localização textual
-precisa conter uma das cidades atendidas do perfil profissional unificado.
+precisa conter a cidade principal de `fornecedores.cidade_atuacao`.
 Essa comparação não calcula distância pelo raio em quilômetros.
 Pedidos do próprio usuário são excluídos.
 

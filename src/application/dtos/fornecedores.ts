@@ -7,7 +7,7 @@ const editaveis = {
   nomeExibicao: textoObrigatorio('NomeExibicao', 200),
   telefone: textoObrigatorio('Telefone', 20),
   cidadeAtuacao: textoObrigatorio('CidadeAtuacao', 120),
-  cidadesAtuacao: z.array(textoObrigatorio('CidadesAtuacao', 120, 2)).min(1).max(30).optional(),
+  cidadesAtuacao: z.array(textoObrigatorio('CidadesAtuacao', 120, 2)).length(1, 'Informe somente a cidade principal de atuação.').optional(),
   ufAtuacao: z.string().length(2),
   raioAtendimentoKm: z.number().int().min(1).max(200),
   bio: textoOpcional('Bio', 360),

@@ -10,21 +10,22 @@ import { dataIso, textoObrigatorio } from './validacao.js';
 // Catálogo e perfil profissional
 // ---------------------------------------------------------------------------------------------
 
-export const categoriaServicoSchema = z.object({ id: z.guid(), slug: z.string(), name: z.string() });
+const codigoEspecialidadeSchema = z.string().trim().regex(/^[a-z][a-z0-9_]*$/, 'Informe um código de especialidade do catálogo.');
+export const categoriaServicoSchema = z.object({ id: codigoEspecialidadeSchema, slug: z.string(), name: z.string() });
 export type CategoriaServico = z.infer<typeof categoriaServicoSchema>;
 
 export const perfilPrestadorResponseSchema = z.object({
   categories: z.array(categoriaServicoSchema),
   cities: z.array(z.string()),
-  registrationComplete: z.boolean().describe('CPF, endereço e contato já foram informados.'),
+  registrationComplete: z.boolean().describe('Perfil profissional PF/PJ com o documento correspondente.'),
   onboardingComplete: z.boolean().describe('Cadastro finalizado e ao menos uma categoria e uma cidade escolhidas.')
 });
 export type PerfilPrestador = z.infer<typeof perfilPrestadorResponseSchema>;
 
 export const atualizarPerfilPrestadorSchema = z
   .object({
-    categoryIds: z.array(z.guid()).min(1, 'Escolha ao menos uma categoria.').max(20, 'Escolha no máximo 20 categorias.'),
-    cities: z.array(textoObrigatorio('Cities', 80, 2)).min(1, 'Informe ao menos uma cidade.').max(30, 'Informe no máximo 30 cidades.')
+    categoryIds: z.array(codigoEspecialidadeSchema).min(1, 'Escolha ao menos uma especialidade.').max(100, 'Escolha no máximo 100 especialidades.'),
+    cities: z.array(textoObrigatorio('Cities', 120, 2)).length(1, 'Informe somente a cidade principal de atuação.')
   })
   .strict();
 export type AtualizarPerfilPrestador = z.output<typeof atualizarPerfilPrestadorSchema>;
@@ -47,7 +48,7 @@ export const resumoPrestadorResponseSchema = z.object({
 export type ResumoPrestador = z.infer<typeof resumoPrestadorResponseSchema>;
 
 export const listarFeedQuerySchema = z.object({
-  category: z.string().optional().describe('Slug da categoria (GET /api/v1/catalog/categories).'),
+  category: z.string().optional().describe('Código ou slug da especialidade (GET /api/v1/catalog/categories).'),
   city: z.string().optional().describe('Cidade contida na localização do pedido, sem diferenciar acentos.'),
   urgency: z.string().optional(),
   q: z.string().optional().describe('Texto no título, categoria ou descrição.'),

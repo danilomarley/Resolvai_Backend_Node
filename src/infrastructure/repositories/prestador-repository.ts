@@ -1,4 +1,5 @@
 import { criarPagina, type PaginaResponse } from '../../application/dtos/common.js';
+import { DomainException } from '../../domain/errors.js';
 import type { FotoPedidoResponse } from '../../application/dtos/pedidos.js';
 import type {
   CategoriaServico,
@@ -74,62 +75,51 @@ export class PrestadorRepository implements IPrestadorRepository {
 
   async listCategorias(): Promise<CategoriaServico[]> {
     return this.database.query<CategoriaServico>(
-      `select c.id as "id", c.slug as "slug", c.nome as "name"
-         from public.categorias_servico c
-         join public.especialidades e on e.codigo=replace(c.slug,'-','_')
-        where c.ativo and e.is_active
-        order by c.ordem,c.nome;`
+      `select e.codigo as "id", replace(e.codigo,'_','-') as "slug", e.nome as "name"
+         from public.especialidades e
+        where e.is_active order by e.nome,e.codigo;`
     );
   }
 
   async getPerfil(prestadorId: string): Promise<Pick<PerfilPrestador, 'categories' | 'cities'>> {
     return this.database.transaction(async sql => {
       const categories = await sql.query<CategoriaServico>(
-        `select c.id as "id", c.slug as "slug", c.nome as "name"
-           from public.prestador_categorias pc
-           join public.categorias_servico c on c.id = pc.id_categoria
-          where pc.id_prestador = $1
-          order by c.ordem, c.nome;`,
+        `select e.codigo as "id", replace(e.codigo,'_','-') as "slug", e.nome as "name"
+           from public.fornecedor_especialidades fe
+           join public.especialidades e on e.codigo=fe.codigo_especialidade
+          where fe.id_usuario=$1 order by e.nome,e.codigo;`,
         [prestadorId]
       );
       const cities = await sql.query<{ cidade: string }>(
-        'select cidade from public.prestador_regioes where id_prestador = $1 order by cidade;',
+        'select cidade_atuacao as cidade from public.fornecedores where id_usuario=$1;',
         [prestadorId]
       );
       return { categories, cities: cities.map(row => row.cidade) };
     }, 'repeatable read');
   }
 
-  savePerfil(prestadorId: string, categoryIds: string[], cities: string[]): Promise<'ok' | 'invalidCategory'> {
+  savePerfil(prestadorId: string, categoryIds: string[], cities: string[]): Promise<'ok' | 'invalidCategory' | 'incomplete'> {
+    if (cities.length !== 1 || !cities[0]?.trim() || cities[0].trim().length > 120) {
+      throw new DomainException('Informe somente a cidade principal de atuação, com até 120 caracteres.');
+    }
     return this.database.transaction(async sql => {
       // The same lock is taken by the full profile editor; proposal creation takes it FOR SHARE.
-      await sql.query('select id from public.users where id=$1 for update', [prestadorId]);
-      const [validas] = await sql.query<{ total: number }>(
-        `select count(*) as "total" from public.categorias_servico c
-          join public.especialidades e on e.codigo=replace(c.slug,'-','_')
-          where c.ativo and e.is_active and c.id=any($1::uuid[])`,
+      const [profile] = await sql.query(`select f.id_usuario from public.users u
+        join public.fornecedores f on f.id_usuario=u.id
+        where u.id=$1 and u.role='Prestador' and u.is_active for update of u`, [prestadorId]);
+      if (!profile) return 'incomplete';
+      const validas = await sql.query<{ codigo: string }>(
+        `select e.codigo from public.especialidades e
+          where e.is_active and e.codigo=any($1::text[]) order by e.codigo for share of e`,
         [categoryIds]
       );
-      if (validas?.total !== categoryIds.length) {
+      if (!categoryIds.length || validas.length !== categoryIds.length) {
         return 'invalidCategory';
       }
-
-      await sql.query('delete from public.prestador_categorias where id_prestador = $1;', [prestadorId]);
-      await sql.query(
-        'insert into public.prestador_categorias (id_prestador, id_categoria) select $1, unnest($2::uuid[]);',
-        [prestadorId, categoryIds]
-      );
-      await sql.query('delete from public.prestador_regioes where id_prestador = $1;', [prestadorId]);
-      await sql.query(
-        'insert into public.prestador_regioes (id_prestador, cidade) select $1, unnest($2::text[]) on conflict do nothing;',
-        [prestadorId, cities]
-      );
-      // Keep the supplier API and the existing provider API on the same professional profile.
       await sql.query('delete from public.fornecedor_especialidades where id_usuario=$1', [prestadorId]);
       await sql.query(`insert into public.fornecedor_especialidades(id_usuario,codigo_especialidade)
-        select $1,replace(c.slug,'-','_') from public.categorias_servico c
-          join public.fornecedores f on f.id_usuario=$1 where c.id=any($2::uuid[])`, [prestadorId, categoryIds]);
-      await sql.query('update public.fornecedores set cidade_atuacao=$2,updated_at=now() where id_usuario=$1', [prestadorId, cities[0]]);
+        select $1,unnest($2::text[])`, [prestadorId, categoryIds]);
+      await sql.query('update public.fornecedores set cidade_atuacao=$2,updated_at=now() where id_usuario=$1', [prestadorId, cities[0]!.trim()]);
       return 'ok';
     });
   }
@@ -157,8 +147,11 @@ export class PrestadorRepository implements IPrestadorRepository {
     // $1 (o prestador) precisa aparecer em todas as consultas que recebem params, mesmo sem filtro de compatibilidade.
     const where = ['$1::uuid is not null', abertoSemEscolhida];
     if (filtro.category) {
+      const category = param(filtro.category);
       where.push(
-        `${norm(`(p.escopo ->> 'categoria')`)} = (select ${norm('c.nome')} from public.categorias_servico c where c.slug = ${param(filtro.category)})`
+        `exists(select 1 from public.especialidades e where e.is_active
+          and (e.codigo=replace(${category},'-','_') or ${norm('e.nome')}=${norm(category)})
+          and ${norm(`(p.escopo ->> 'categoria')`)} in (${norm('e.nome')},${norm('e.codigo')}))`
       );
     }
     if (filtro.city) {

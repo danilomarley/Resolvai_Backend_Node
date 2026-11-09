@@ -1,4 +1,4 @@
--- Reconciles the supplier PR and main without replaying historical scripts.
+-- Complements proposals/reviews using the existing supplier tables as the canonical profile.
 -- Apply through the normal migration workflow after reviewing the target schema.
 begin;
 
@@ -102,78 +102,6 @@ alter table public.propostas add column if not exists prazo_dias integer;
 alter table public.propostas drop constraint if exists ck_propostas_prazo_dias;
 alter table public.propostas add constraint ck_propostas_prazo_dias check (prazo_dias is null or prazo_dias > 0);
 
--- 015_create_categorias_servico.sql
--- Catálogo de categorias de serviço (D6 do app do prestador): é a lista que o prestador escolhe no cadastro
--- e que o feed usa para marcar pedidos "compatíveis". A carga inicial está no final deste script e pode ser
--- editada à vontade: o conteúdo do catálogo é só dado. Idempotente (pode rodar de novo; não duplica nem apaga).
---
--- Também cria public.resolvai_norm(texto): minúsculas e sem acentos, usada para comparar categoria e cidade
--- de forma tolerante ("Elétrica" = "eletrica", "Fortaleza/CE" contém "fortaleza").
-
-create or replace function public.resolvai_norm(texto text) returns text
-language sql immutable as $$
-  select translate(lower(coalesce(texto, '')), 'áàâãäéèêëíìîïóòôõöúùûüç', 'aaaaaeeeeiiiiooooouuuuc')
-$$;
-
-create table if not exists public.categorias_servico (
-    id     uuid     primary key default gen_random_uuid(),
-    slug   text     not null,
-    nome   text     not null,
-    ativo  boolean  not null default true,
-    ordem  integer  not null default 0,
-    constraint uq_categorias_servico_slug unique (slug)
-);
-
--- Acesso só pela API (conexão do servidor); sem acesso direto pelo cliente do Supabase.
-alter table public.categorias_servico enable row level security;
-
-insert into public.categorias_servico (slug, nome, ordem) values
-    ('eletrica',               'Elétrica',                      10),
-    ('hidraulica',             'Hidráulica',                    20),
-    ('impermeabilizacao',      'Impermeabilização',             30),
-    ('alvenaria',              'Alvenaria',                     40),
-    ('pintura',                'Pintura',                       50),
-    ('gesso-e-forro',          'Gesso e forro',                 60),
-    ('pisos-e-revestimentos',  'Pisos e revestimentos',         70),
-    ('telhados-e-coberturas',  'Telhados e coberturas',         80),
-    ('marcenaria',             'Marcenaria',                    90),
-    ('serralheria',            'Serralheria',                  100),
-    ('vidracaria',             'Vidraçaria',                   110),
-    ('ar-condicionado',        'Ar-condicionado',              120),
-    ('jardinagem',             'Jardinagem e paisagismo',      130),
-    ('limpeza-pos-obra',       'Limpeza pós-obra',             140),
-    ('montagem-de-moveis',     'Montagem de móveis',           150),
-    ('dedetizacao',            'Dedetização',                  160),
-    ('reformas-em-geral',      'Reformas em geral',            170),
-    ('outros',                 'Outros serviços',              999)
-on conflict (slug) do nothing;
-
--- 016_create_perfil_prestador.sql
--- Perfil profissional do prestador (D1/D2: cadastro livre, sem documentos nesta etapa):
---   prestador_categorias: categorias em que ele atua (catálogo do script 015)
---   prestador_regioes:    cidades que ele atende (texto livre, comparado sem acento/maiúsculas)
--- Pedido "compatível" = categoria do pedido está nas do prestador E a cidade do pedido está nas dele.
--- Depende do 015. Idempotente.
-
-create table if not exists public.prestador_categorias (
-    id_prestador  uuid  not null references public.users (id) on delete cascade,
-    id_categoria  uuid  not null references public.categorias_servico (id),
-    primary key (id_prestador, id_categoria)
-);
-
-create table if not exists public.prestador_regioes (
-    id            uuid  primary key default gen_random_uuid(),
-    id_prestador  uuid  not null references public.users (id) on delete cascade,
-    cidade        text  not null,
-    constraint ck_prestador_regioes_cidade check (char_length(btrim(cidade)) between 2 and 80)
-);
-
-create unique index if not exists uq_prestador_regioes_cidade
-    on public.prestador_regioes (id_prestador, public.resolvai_norm(cidade));
-
-alter table public.prestador_categorias enable row level security;
-alter table public.prestador_regioes enable row level security;
-
 -- Additive extension of the existing proposals table. Legacy columns/rows are preserved.
 alter table public.propostas
   add column if not exists data_inicio date,
@@ -210,33 +138,5 @@ update public.propostas set prazo_dias=substring(btrim(prazo) from '^([0-9]+)[ ]
  where prazo_dias is null and btrim(prazo) ~ '^[0-9]{1,3}[ ]+dias?$'
    and substring(btrim(prazo) from '^([0-9]+)[ ]+dias?$')::integer between 1 and 365;
 
--- The category slug and specialty code differ only in the '-' / '_' separator.
--- Keep existing UUIDs/codes and all existing professional memberships.
-insert into public.categorias_servico(slug,nome,ativo)
-  select replace(e.codigo,'_','-'),e.nome,e.is_active from public.especialidades e
-  on conflict (slug) do nothing;
-insert into public.especialidades(codigo,nome,is_active)
-  select replace(c.slug,'-','_'),c.nome,c.ativo from public.categorias_servico c
-  on conflict do nothing;
-insert into public.prestador_categorias(id_prestador,id_categoria)
-  select fe.id_usuario,c.id from public.fornecedor_especialidades fe
-    join public.categorias_servico c on replace(c.slug,'-','_')=fe.codigo_especialidade
-  on conflict do nothing;
-insert into public.fornecedor_especialidades(id_usuario,codigo_especialidade)
-  select pc.id_prestador,e.codigo from public.prestador_categorias pc
-    join public.fornecedores f on f.id_usuario=pc.id_prestador
-    join public.categorias_servico c on c.id=pc.id_categoria
-    join public.especialidades e on e.codigo=replace(c.slug,'-','_')
-  on conflict do nothing;
-
--- Supplier's historical primary city accepted up to 120 characters. Preserve those values.
-alter table public.prestador_regioes drop constraint if exists ck_prestador_regioes_cidade;
-alter table public.prestador_regioes add constraint ck_prestador_regioes_cidade
-  check (char_length(btrim(cidade)) between 1 and 120);
-insert into public.prestador_regioes(id_prestador,cidade)
-  select f.id_usuario,btrim(f.cidade_atuacao) from public.fornecedores f
-  on conflict do nothing;
-
-revoke all privileges on table public.avaliacoes,public.categorias_servico,
-  public.prestador_categorias,public.prestador_regioes from public,anon,authenticated;
+revoke all privileges on table public.avaliacoes from public,anon,authenticated;
 commit;

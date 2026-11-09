@@ -105,7 +105,7 @@ Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md
 
 A recuperação por código preserva `check-email` e `reset-password`: o segundo recebe `{email, token, newPassword}` e valida o OTP de uso único no Supabase. O fluxo por link usa `forgot-password` com `{email, redirectTo}` e `change-password` com Bearer e `{newPassword}`. A alteração usa a sessão verificada do usuário. Veja [recuperação segura](docs/PASSWORD-RECOVERY.md).
 
-O cadastro de Cliente permanece simples em `register`. O cadastro de fornecedor em `register-provider` exige PF/PJ, documento correspondente, contato e especialidades. O perfil aceita várias cidades atendidas. Catálogos e regiões são compartilhados com as rotas `/provider/*`; propostas exigem especialidade e cidade compatíveis.
+O cadastro de Cliente permanece simples em `register`. O cadastro de fornecedor em `register-provider` exige PF/PJ, documento correspondente, contato e especialidades. As duas APIs profissionais usam somente `fornecedores`, `especialidades` e `fornecedor_especialidades`, com a cidade principal em `fornecedores.cidade_atuacao`. As listas `cities`/`cidadesAtuacao` contêm somente essa cidade; múltiplas cidades são rejeitadas. Em `/catalog/categories`, `id` é o código textual da especialidade, usado também em `categoryIds` de `/provider/profile`; UUIDs de categoria não são usados. Propostas exigem especialidade e cidade compatíveis.
 
 Contratos e retomada estão em [PROVIDER-REGISTRATION.md](docs/PROVIDER-REGISTRATION.md). Cadastros respeitam a política de confirmação do Auth, preservam a senha de contas pendentes e têm limites por IP.
 

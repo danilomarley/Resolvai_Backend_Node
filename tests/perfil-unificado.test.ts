@@ -5,6 +5,14 @@ import { PGlite } from '@electric-sql/pglite';
 import { citext } from '@electric-sql/pglite/contrib/citext';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { describe, expect, it } from 'vitest';
+import { SignJWT } from 'jose';
+import { buildApp } from '../src/api/app.js';
+import { criarDependencias } from '../src/composicao.js';
+import { loadConfig } from '../src/config/env.js';
+import { AuthService } from '../src/application/services/auth-service.js';
+import { atualizarPerfilPrestadorSchema } from '../src/application/dtos/prestador.js';
+import { atualizarFornecedorRequestSchema } from '../src/application/dtos/fornecedores.js';
+import { FakeSupabase } from './fakes.js';
 import { ConflictException, ForbiddenException, UnauthorizedException } from '../src/application/errors.js';
 import { PrestadorService } from '../src/application/services/prestador-service.js';
 import { FornecedorService } from '../src/application/services/fornecedor-service.js';
@@ -24,13 +32,13 @@ const root = join(import.meta.dirname, '..');
 const migration = readFileSync(join(root, 'supabase/migrations/20261109014627_reconcile_fornecedor_prestador.sql'), 'utf8');
 const prScripts = new Set(['013_create_fornecedores.sql', '014_create_especialidades_fornecedor.sql', '015_users_cpf_por_papel.sql', '016_expand_propostas_form.sql']);
 
-async function banco(mode: 'pr' | 'main' | 'combined') {
+async function banco(mode: 'pr' | 'combined') {
   const pg = await PGlite.create({ extensions: { citext, pgcrypto } });
   await pg.exec(`create role anon; create role authenticated; create schema storage;
     create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`);
   const scripts = join(root, 'db/scripts');
   for (const file of readdirSync(scripts).filter(name => name.endsWith('.sql')).sort()) {
-    if (mode === 'combined' || (mode === 'main' ? !prScripts.has(file) : Number(file.slice(0, 3)) <= 12 || prScripts.has(file))) {
+    if (mode === 'combined' || Number(file.slice(0, 3)) <= 12 || prScripts.has(file)) {
       await pg.exec(readFileSync(join(scripts, file), 'utf8'));
     }
   }
@@ -60,7 +68,7 @@ function executor(pg: PGlite): Database {
   };
 }
 
-describe('Convergência de perfil e schema fornecedor/prestador', () => {
+describe('Perfil canônico nas tabelas existentes de fornecedor', () => {
   it('atualiza o schema já usado pelo PR, preserva dados e pode ser repetida', async () => {
     const pg = await banco('pr');
     try {
@@ -80,6 +88,9 @@ describe('Convergência de perfil e schema fornecedor/prestador', () => {
 
       await pg.exec(migration);
       await pg.exec(migration);
+      for (const table of ['categorias_servico', 'prestador_categorias', 'prestador_regioes']) {
+        expect((await pg.query('select to_regclass($1) as name', [`public.${table}`])).rows[0]).toEqual({ name: null });
+      }
 
       const proposal = (await pg.query('select valor,prazo_dias,portfolio from propostas where id=$1', [proposta])).rows[0];
       expect(proposal).toMatchObject({ prazo_dias: 5, portfolio: [{ url: 'https://example.com/original.jpg', name: 'original.jpg' }] });
@@ -91,22 +102,47 @@ describe('Convergência de perfil e schema fornecedor/prestador', () => {
     } finally { await pg.close(); }
   });
 
-  it('atualiza o schema da main mantendo cidades e categorias existentes', async () => {
-    const pg = await banco('main');
+  it('login, perfil, catálogo e oportunidades funcionam no schema atual, sem aplicar a migração pendente', async () => {
+    const pg = await banco('pr');
     try {
+      const db = executor(pg);
       const id = randomUUID();
-      await pg.query("insert into users(id,name,email,role,cpf) values($1,'Legado','legado@teste.com','Prestador','52998224725')", [id]);
-      await pg.query("insert into prestador_categorias(id_prestador,id_categoria) select $1,id from categorias_servico where slug='hidraulica'", [id]);
-      await pg.query("insert into prestador_regioes(id_prestador,cidade) values($1,'Recife')", [id]);
-      await pg.exec(migration);
-      const profile = await new PrestadorRepository(executor(pg)).getPerfil(id);
-      expect(profile.cities).toEqual(['Recife']);
-      expect(profile.categories.map(item => item.slug)).toEqual(['hidraulica']);
-      expect((await pg.query('select codigo from especialidades')).rows).toHaveLength(18);
+      const email = 'login-canonico@example.invalid';
+      const user = User.register(id, 'Profissional', Email.create(email), UserRole.Prestador);
+      user.completeRegistration('52998224725');
+      const fornecedores = new FornecedorRepository(db);
+      await fornecedores.addComplete(user, Fornecedor.register(id, 'PF', undefined, {
+        nomeExibicao: 'Profissional', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', raioAtendimentoKm: 20
+      }), Contato.register(id, 'whatsapp', '85999999999', true), ['eletrica']);
+      const config = loadConfig({ DATABASE_URL: 'postgresql://synthetic.invalid/test', SUPABASE_URL: 'https://auth.example.invalid',
+        SUPABASE_ANON_KEY: 'synthetic-public', SUPABASE_SERVICE_ROLE_KEY: 'synthetic-private', SUPABASE_JWT_SECRET: 'synthetic-local-test-secret' });
+      const token = await new SignJWT({ email }).setProtectedHeader({ alg: 'HS256' }).setSubject(id)
+        .setIssuer(config.supabase.authIssuer).setAudience('authenticated').setExpirationTime('5m')
+        .sign(new TextEncoder().encode(config.supabase.jwtSecret));
+      const auth = new FakeSupabase();
+      auth.session = { accessToken: token, tokenType: 'Bearer', expiresAtUtc: new Date(Date.now() + 300_000), refreshToken: 'synthetic-refresh', user: { id, email } };
+      const dependencias = criarDependencias(config, db);
+      dependencias.authService = new AuthService(dependencias.userRepository, auth, fornecedores);
+      const app = await buildApp({ dependencias });
+      try {
+        const login = await app.inject({ method: 'POST', url: '/api/v1/auth/login-provider', payload: { email, password: 'Synthetic123!' } });
+        expect(login.statusCode, login.body).toBe(200);
+        const headers = { authorization: `Bearer ${login.json().accessToken}` };
+        const profile = await app.inject({ method: 'GET', url: '/api/v1/fornecedores/me', headers });
+        expect(profile.statusCode, profile.body).toBe(200);
+        expect(profile.json()).toMatchObject({ idUsuario: id, especialidades: ['eletrica'], cidadeAtuacao: 'Fortaleza', cidadesAtuacao: ['Fortaleza'] });
+        for (const url of ['/api/v1/especialidades', '/api/v1/catalog/categories', '/api/v1/provider/profile', '/api/v1/provider/orders', '/api/v1/fornecedores/me/oportunidades']) {
+          const response = await app.inject({ method: 'GET', url, headers });
+          expect(response.statusCode, `${url}: ${response.body}`).toBe(200);
+        }
+      } finally { await app.close(); }
+      for (const table of ['categorias_servico', 'prestador_categorias', 'prestador_regioes', 'avaliacoes']) {
+        expect((await pg.query('select to_regclass($1) as name', [`public.${table}`])).rows[0]).toEqual({ name: null });
+      }
     } finally { await pg.close(); }
   });
 
-  it('reconhece PJ sem CPF e sincroniza edição nas duas APIs, incluindo cidades e oportunidades', async () => {
+  it('reconhece PJ sem CPF e usa os mesmos vínculos e cidade principal nas duas APIs', async () => {
     const pg = await banco('combined');
     try {
       await pg.exec(migration);
@@ -117,23 +153,24 @@ describe('Convergência de perfil e schema fornecedor/prestador', () => {
       const id = randomUUID();
       const cliente = randomUUID();
       const user = User.register(id, 'Empresa', Email.create('empresa@teste.com'), UserRole.Prestador);
-      const dados = { nomeExibicao: 'Empresa', cidadeAtuacao: 'Fortaleza', cidadesAtuacao: ['Fortaleza', 'Caucaia', 'caucaia '], ufAtuacao: 'CE', raioAtendimentoKm: 20 };
+      const dados = { nomeExibicao: 'Empresa', cidadeAtuacao: 'Fortaleza', cidadesAtuacao: ['fortaleza '], ufAtuacao: 'CE', raioAtendimentoKm: 20 };
       await fornecedores.addComplete(user, Fornecedor.register(id, 'PJ', '11.222.333/0001-81', dados), Contato.register(id, 'whatsapp', '85999999999', true), ['eletrica']);
       const service = new PrestadorService(prestadores, users, fornecedores);
-      expect(await service.perfil({ isAuthenticated: true, id })).toMatchObject({ registrationComplete: true, onboardingComplete: true, cities: ['Caucaia', 'Fortaleza'] });
-      expect((await fornecedores.getByUsuarioId(id))?.cidadesAtuacao).toEqual(['Caucaia', 'Fortaleza']);
+      expect(await service.perfil({ isAuthenticated: true, id })).toMatchObject({ registrationComplete: true, onboardingComplete: true, cities: ['Fortaleza'] });
+      expect((await fornecedores.getByUsuarioId(id))?.cidadesAtuacao).toEqual(['Fortaleza']);
 
       const categories = await prestadores.listCategorias();
       const pintura = categories.find(item => item.slug === 'pintura')!;
-      expect(await prestadores.savePerfil(id, [pintura.id], ['Recife', 'Olinda'])).toBe('ok');
-      expect(await fornecedores.getByUsuarioId(id)).toMatchObject({ especialidades: ['pintura'], cidadeAtuacao: 'Recife', cidadesAtuacao: ['Olinda', 'Recife'] });
+      expect(pintura.id).toBe('pintura');
+      expect(await prestadores.savePerfil(id, [pintura.id], ['Recife'])).toBe('ok');
+      expect(await fornecedores.getByUsuarioId(id)).toMatchObject({ especialidades: ['pintura'], cidadeAtuacao: 'Recife', cidadesAtuacao: ['Recife'] });
 
       const fornecedorService = new FornecedorService(users, fornecedores, new EspecialidadeQueries(db), {} as never);
       await fornecedorService.updateCurrent({ isAuthenticated: true, id }, {
         name: 'Empresa', nomeExibicao: 'Empresa', telefone: '85999999999', cidadeAtuacao: 'Fortaleza',
         ufAtuacao: 'CE', raioAtendimentoKm: 20, especialidades: ['eletrica']
       });
-      expect((await fornecedores.getByUsuarioId(id))?.cidadesAtuacao).toEqual(['Fortaleza', 'Olinda']);
+      expect((await fornecedores.getByUsuarioId(id))?.cidadesAtuacao).toEqual(['Fortaleza']);
 
       await fornecedores.updateComplete(user, Fornecedor.register(id, 'PJ', '11.222.333/0001-81', dados), Contato.register(id, 'whatsapp', '85999999999', true), ['eletrica']);
       expect((await prestadores.getPerfil(id)).categories.map(item => item.slug)).toEqual(['eletrica']);
@@ -142,7 +179,7 @@ describe('Convergência de perfil e schema fornecedor/prestador', () => {
         await pg.query('insert into pedidos(id,id_cliente,escopo) values($1,$2,$3::jsonb)', [randomUUID(), dono, JSON.stringify({ categoria, localizacao })]);
       }
       const opportunities = await new OportunidadeQueries(db).list(id, { page: 1, pageSize: 10, category: '', search: '', sort: 'recent' });
-      expect(opportunities.totalItems).toBe(2);
+      expect(opportunities.totalItems).toBe(1);
     } finally { await pg.close(); }
   });
 
@@ -166,10 +203,10 @@ describe('Convergência de perfil e schema fornecedor/prestador', () => {
         await pg.query("insert into contatos(id_usuario,tipo,valor,principal) values($1,'whatsapp','85911111111',true)", [id]);
         const profile = await service.completeCurrent({ isAuthenticated: true, id }, {
           name: 'Nome atualizado', nomeExibicao: 'Profissional', tipoPessoa: documento.tipoPessoa, cpf: documento.cpf, cnpj: documento.cnpj, telefone: '85999999999',
-          cidadeAtuacao: 'Fortaleza', cidadesAtuacao: ['Fortaleza', 'Caucaia'], ufAtuacao: 'CE',
+          cidadeAtuacao: 'Fortaleza', cidadesAtuacao: ['Fortaleza'], ufAtuacao: 'CE',
           raioAtendimentoKm: 20, especialidades: ['eletrica']
         });
-        expect(profile).toMatchObject({ idUsuario: id, email, tipoPessoa: documento.tipoPessoa, cidadesAtuacao: ['Caucaia', 'Fortaleza'] });
+        expect(profile).toMatchObject({ idUsuario: id, email, tipoPessoa: documento.tipoPessoa, cidadesAtuacao: ['Fortaleza'] });
         const user = await users.getById(id);
         expect(user).toMatchObject({ id, role: UserRole.Prestador, cpf: documento.cpfExistente ?? documento.cpf ?? null });
         expect(user?.email.value).toBe(email);
@@ -178,6 +215,37 @@ describe('Convergência de perfil e schema fornecedor/prestador', () => {
         expect((await new PrestadorService(new PrestadorRepository(db), users, fornecedores).perfil({ isAuthenticated: true, id })).onboardingComplete).toBe(true);
       }
       expect((await pg.query('select id from users')).rows).toHaveLength(3);
+    } finally { await pg.close(); }
+  });
+
+  it('recusa várias cidades e especialidade inválida sem perder a cidade ou os vínculos atuais', async () => {
+    const pg = await banco('pr');
+    try {
+      const db = executor(pg);
+      const users = new UserRepository(db);
+      const fornecedores = new FornecedorRepository(db);
+      const prestadores = new PrestadorRepository(db);
+      const id = randomUUID();
+      const user = User.register(id, 'Profissional', Email.create('single-city@example.invalid'), UserRole.Prestador);
+      user.completeRegistration('52998224725');
+      const dados = { nomeExibicao: 'Profissional', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', raioAtendimentoKm: 20 };
+      await fornecedores.addComplete(user, Fornecedor.register(id, 'PF', undefined, dados), Contato.register(id, 'whatsapp', '85999999999', true), ['eletrica']);
+      const body = { ...dados, name: user.name, telefone: '85999999999', especialidades: ['pintura'] };
+      expect(atualizarFornecedorRequestSchema.safeParse({ ...body, cidadesAtuacao: ['Fortaleza', 'Caucaia'] }).success).toBe(false);
+      expect(atualizarPerfilPrestadorSchema.safeParse({ categoryIds: ['pintura'], cities: ['Fortaleza', 'Caucaia'] }).success).toBe(false);
+      const service = new FornecedorService(users, fornecedores, new EspecialidadeQueries(db), {} as never);
+      await expect(service.updateCurrent({ isAuthenticated: true, id }, { ...body, cidadesAtuacao: ['Fortaleza', 'Caucaia'] })).rejects.toThrow('somente a cidade principal');
+      await expect(service.updateCurrent({ isAuthenticated: true, id }, { ...body, cidadesAtuacao: ['Recife'] })).rejects.toThrow('somente a cidade principal');
+      expect(await prestadores.savePerfil(id, ['nao_existe'], ['Recife'])).toBe('invalidCategory');
+      await pg.query("update especialidades set is_active=false where codigo='pintura'");
+      expect(await prestadores.savePerfil(id, ['pintura'], ['Recife'])).toBe('invalidCategory');
+      expect(await fornecedores.getByUsuarioId(id)).toMatchObject({ cidadeAtuacao: 'Fortaleza', cidadesAtuacao: ['Fortaleza'], especialidades: ['eletrica'] });
+      const legacy = User.register(randomUUID(), 'Legado', Email.create('legacy-profile@example.invalid'), UserRole.Prestador);
+      legacy.completeRegistration('11144477735');
+      await users.add(legacy);
+      expect(await prestadores.savePerfil(legacy.id, ['eletrica'], ['Fortaleza'])).toBe('incomplete');
+      expect(await new PrestadorService(prestadores, users, fornecedores).perfil({ isAuthenticated: true, id: legacy.id }))
+        .toMatchObject({ categories: [], cities: [], registrationComplete: false, onboardingComplete: false });
     } finally { await pg.close(); }
   });
 

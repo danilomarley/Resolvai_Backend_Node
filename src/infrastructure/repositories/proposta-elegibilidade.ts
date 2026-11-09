@@ -11,10 +11,10 @@ export async function avaliarPedidoParaProposta(sql: Sql, orderId: string, provi
     await sql.query('select id from public.users where id=$1 for share', [providerId]);
   }
   const [result] = await sql.query<{ registrationComplete: boolean; available: boolean | null }>(`select
-      (
-        ((f.id_usuario is null or f.tipo_pessoa='PF') and nullif(btrim(u.cpf),'') is not null)
+      (f.id_usuario is not null and (
+        (f.tipo_pessoa='PF' and nullif(btrim(u.cpf),'') is not null)
         or (f.tipo_pessoa='PJ' and nullif(btrim(f.cnpj),'') is not null)
-      ) as "registrationComplete",
+      )) as "registrationComplete",
       (p.id_cliente<>$2 and ${abertoSemEscolhida} and ${compativelExpr('$2')}) as "available"
     from public.users u
     left join public.fornecedores f on f.id_usuario=u.id
