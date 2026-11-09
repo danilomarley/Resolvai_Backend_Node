@@ -4,6 +4,7 @@ import { DomainException } from './errors.js';
 export interface DadosProfissionais {
   nomeExibicao: string;
   cidadeAtuacao: string;
+  cidadesAtuacao?: string[];
   ufAtuacao: string;
   raioAtendimentoKm: number;
   bio?: string | null;
@@ -36,8 +37,16 @@ export class Fornecedor {
     if (tipoPessoa === 'PF' && cnpj?.trim()) throw new DomainException('Pessoa física não pode informar CNPJ.');
     const documento = tipoPessoa === 'PJ' ? normalizarCnpj(cnpj) : null;
     if (tipoPessoa === 'PJ' && !documento) throw new DomainException('CNPJ inválido.');
+    const cidades = new Map<string, string>();
+    for (const value of [dados.cidadeAtuacao, ...(dados.cidadesAtuacao ?? [])]) {
+      const cidade = value.trim().replace(/\s+/g, ' ');
+      if (!cidade || cidade.length > 120) throw new DomainException('Informe cidades de atuação com até 120 caracteres.');
+      const chave = cidade.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      if (!cidades.has(chave)) cidades.set(chave, cidade);
+    }
+    if (cidades.size > 30) throw new DomainException('Informe no máximo 30 cidades de atuação.');
     return new Fornecedor(idUsuario, tipoPessoa, documento, {
-      ...dados, nomeExibicao: dados.nomeExibicao.trim(), cidadeAtuacao: dados.cidadeAtuacao.trim(), ufAtuacao, bio, registroProfissional
+      ...dados, nomeExibicao: dados.nomeExibicao.trim(), cidadeAtuacao: dados.cidadeAtuacao.trim(), cidadesAtuacao: [...cidades.values()], ufAtuacao, bio, registroProfissional
     });
   }
 

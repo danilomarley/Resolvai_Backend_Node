@@ -7,8 +7,9 @@ import type {
   PedidoResumoResponse,
   PropostaResponse
 } from '../../application/dtos/pedidos.js';
-import { StatusPedido, type StatusProposta } from '../../domain/enums.js';
+import { StatusPedido } from '../../domain/enums.js';
 import type { Database, Sql } from '../database.js';
+import { propostaColumns, propostaFrom, toProposta, type PropostaRow } from './proposta-sql.js';
 
 // Os status do banco ficam em português; a API expõe os nomes de StatusPedido/StatusProposta.
 // Manter alinhado com toDbStatus.
@@ -18,13 +19,6 @@ const statusPedidoColumn = `
        when 'em_andamento' then 'InProgress'
        when 'concluido' then 'Completed'
        when 'cancelado' then 'Cancelled'
-  end`;
-
-const statusPropostaColumn = `
-  case pr.status
-       when 'enviada' then 'Sent'
-       when 'visualizada' then 'Viewed'
-       when 'escolhida' then 'Chosen'
   end`;
 
 const categoriaColumn = `nullif(btrim(p.escopo ->> 'categoria'), '')`;
@@ -74,17 +68,6 @@ interface FotoRow {
   id: string;
   url: string;
   description: string | null;
-}
-
-interface PropostaRow {
-  id: string;
-  providerId: string;
-  providerName: string;
-  status: StatusProposta;
-  value: number;
-  deadline: string | null;
-  description: string | null;
-  warranty: string | null;
 }
 
 /**
@@ -148,17 +131,8 @@ export class PedidoQueries implements IPedidoQueries {
       );
 
       const propostas = await sql.query<PropostaRow>(
-        `select pr.id as "id",
-                pr.id_prestador as "providerId",
-                u.name as "providerName",
-                ${statusPropostaColumn} as "status",
-                pr.valor as "value",
-                pr.prazo as "deadline",
-                pr.descricao as "description",
-                pr.garantia as "warranty"
-           from public.propostas pr
-           join public.pedidos p on p.id = pr.id_pedido
-           join public.users u on u.id = pr.id_prestador
+        `select ${propostaColumns}
+          ${propostaFrom}
           where pr.id_pedido = $1 and p.id_cliente = $2
           order by pr.status = 'escolhida' desc, pr.valor, pr.id;`,
         [id, userId]
@@ -185,7 +159,7 @@ export class PedidoQueries implements IPedidoQueries {
 
       const [propostas] = await sql.query<ContagemPropostasResponse>(
         `select count(*) as "total",
-                count(*) filter (where p.status = 'aberto') as "awaitingDecision",
+                count(*) filter (where p.status = 'aberto' and pr.status in ('enviada', 'visualizada')) as "awaitingDecision",
                 count(*) filter (where p.status = 'aberto' and pr.status = 'enviada') as "unviewed"
            from public.propostas pr
            join public.pedidos p on p.id = pr.id_pedido
@@ -268,17 +242,4 @@ function toPedido(row: PedidoRow, photos: FotoPedidoResponse[], proposals: Propo
 
 function toFoto(row: FotoRow): FotoPedidoResponse {
   return { id: row.id, url: row.url, description: opcional(row.description) };
-}
-
-function toProposta(row: PropostaRow): PropostaResponse {
-  return {
-    id: row.id,
-    providerId: row.providerId,
-    providerName: row.providerName,
-    status: row.status,
-    value: row.value,
-    deadline: opcional(row.deadline),
-    description: opcional(row.description),
-    warranty: opcional(row.warranty)
-  };
 }

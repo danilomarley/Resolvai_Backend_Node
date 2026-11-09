@@ -2,7 +2,7 @@ import { Email } from '../../domain/email.js';
 import { UserRole } from '../../domain/enums.js';
 import { User } from '../../domain/user.js';
 import type { CurrentUser, IFornecedorRepository, ISupabaseAuthClient, IUserRepository, SupabaseSession } from '../contracts.js';
-import type { LoginRequest, LoginResponse, RedefinirSenhaRequest, RegisterRequest, VerificarEmailRequest } from '../dtos/auth.js';
+import type { AlterarSenhaRequest, LoginRequest, LoginResponse, RedefinirSenhaRequest, RegisterRequest, VerificarEmailRequest } from '../dtos/auth.js';
 import type { UserResponse } from '../dtos/users.js';
 import { ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '../errors.js';
 import { toUserResponse } from '../mappings/user-mapper.js';
@@ -73,19 +73,32 @@ export class AuthService {
     return toUserResponse(user);
   }
 
-  /** Resposta pública uniforme, sem consultar a existência da conta. */
-  async verificarEmail(_request: VerificarEmailRequest): Promise<void> {
+  /** O provedor envia a prova por e-mail; não consultamos existência no banco local. */
+  async verificarEmail(request: VerificarEmailRequest): Promise<void> {
+    await this.supabaseAuthClient.requestPasswordRecovery(Email.create(request.email).value);
   }
 
   async solicitarRecuperacao(email: string, redirectTo: string): Promise<void> {
     await this.supabaseAuthClient.requestPasswordRecovery(Email.create(email).value, redirectTo);
   }
 
-  /** Somente o sujeito de um Bearer verificado pode alterar sua senha. */
-  async redefinirSenha(request: RedefinirSenhaRequest, currentUser: CurrentUser): Promise<void> {
-    if (!currentUser.isAuthenticated || !currentUser.id) throw new UnauthorizedException();
+  /** O OTP é consumido pelo Supabase; a atualização usa somente a sessão verificada. */
+  async redefinirSenha(request: RedefinirSenhaRequest): Promise<void> {
+    if (!/^\d{6}$/.test(request.token ?? '')) throw new UnauthorizedException('Código inválido ou expirado.');
+    const email = Email.create(request.email).value;
+    const session = await this.supabaseAuthClient.verifyPasswordRecovery(email, request.token);
+    const user = await this.userRepository.getById(session.user.id);
+    if (!user?.isActive || user.email.value !== email || session.user.email.toLowerCase() !== email) {
+      throw new UnauthorizedException('Código inválido ou expirado.');
+    }
+    await this.supabaseAuthClient.updateOwnPassword(session.accessToken, request.newPassword);
+  }
+
+  /** A sessão Bearer verificada altera a própria senha, sem operação administrativa. */
+  async alterarSenha(request: AlterarSenhaRequest, currentUser: CurrentUser, accessToken: string): Promise<void> {
+    if (!currentUser.isAuthenticated || !currentUser.id || !accessToken.trim()) throw new UnauthorizedException();
     const user = await this.userRepository.getById(currentUser.id);
-    if (!user || !user.isActive) throw new UnauthorizedException();
-    await this.supabaseAuthClient.adminUpdatePassword(user.id, request.newPassword);
+    if (!user?.isActive) throw new UnauthorizedException();
+    await this.supabaseAuthClient.updateOwnPassword(accessToken, request.newPassword);
   }
 }

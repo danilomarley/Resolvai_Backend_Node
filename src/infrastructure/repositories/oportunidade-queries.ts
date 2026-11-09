@@ -4,6 +4,7 @@ import type { EspecialidadeResponse } from '../../application/dtos/fornecedores.
 import type { ListarOportunidadesQuery, OportunidadeDetalhe, OportunidadeResumo, OportunidadesResponse } from '../../application/dtos/oportunidades.js';
 import type { FotoPedidoResponse } from '../../application/dtos/pedidos.js';
 import type { Database } from '../database.js';
+import { compativelExpr } from './prestador-sql.js';
 
 // Match whole category names/codes, ignoring accents, case and surrounding whitespace.
 // Built-ins only: no extension or remote schema migration is required.
@@ -13,6 +14,7 @@ const matchingOrders = `with specialties as (
   select e.codigo, e.nome
     from public.fornecedor_especialidades fe
     join public.especialidades e on e.codigo = fe.codigo_especialidade and e.is_active = true
+    join public.categorias_servico c on replace(c.slug,'-','_')=e.codigo and c.ativo
     join public.fornecedores f on f.id_usuario = fe.id_usuario
     join public.users u on u.id = f.id_usuario and u.role = 'Prestador' and u.is_active = true
    where fe.id_usuario = $1
@@ -31,6 +33,7 @@ const matchingOrders = `with specialties as (
     ) specialty on true
    where p.status = 'aberto' and p.id_cliente <> $1
      and jsonb_typeof(p.escopo->'categoria') = 'string'
+     and ${compativelExpr('$1')}
      and not exists (select 1 from public.propostas chosen where chosen.id_pedido = p.id and chosen.status = 'escolhida')
 )`;
 

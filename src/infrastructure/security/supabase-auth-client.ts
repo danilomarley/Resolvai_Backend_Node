@@ -165,25 +165,49 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     return { id: body.id!.toLowerCase(), email: body.email ?? email };
   }
 
-  async requestPasswordRecovery(email: string, redirectTo: string): Promise<void> {
-    const query = new URLSearchParams({ redirect_to: redirectTo });
-    const response = await this.send(`auth/v1/recover?${query}`, this.options.anonKey, { email });
+  async requestPasswordRecovery(email: string, redirectTo?: string): Promise<void> {
+    const path = redirectTo ? `recover?${new URLSearchParams({ redirect_to: redirectTo })}` : 'recover';
+    const response = await this.recoveryRequest(path, { email });
+    // O fluxo OTP mantém a resposta indistinguível para conta ausente, bloqueio e limite do provedor.
+    if (!redirectTo) {
+      if (!response.ok && ![400, 404, 422, 429].includes(response.status)) throw recoveryUnavailable();
+      return;
+    }
     const payload = await response.text();
     if (response.status === 429) throw new MuitasTentativasException();
-    // Do not reveal whether an email belongs to an account.
     const error = deserialize<{ error_code?: string; code?: string }>(payload);
     if ([400, 404, 422].includes(response.status) && (error?.error_code ?? error?.code) === 'user_not_found') return;
-    if (!response.ok) throw new ServicoIndisponivelException('Não foi possível enviar o e-mail de recuperação. Tente novamente mais tarde.');
+    if (!response.ok) throw recoveryUnavailable();
   }
 
-  async adminUpdatePassword(userId: string, password: string): Promise<void> {
-    const response = await this.send(`auth/v1/admin/users/${encodeURIComponent(userId)}`, this.options.serviceRoleKey, { password }, 'PUT');
-    await response.text();
-    if (response.status === 422) {
-      throw new DomainException('A nova senha não atende às regras de segurança do Supabase Auth.');
-    }
+  async verifyPasswordRecovery(email: string, token: string): Promise<SupabaseSession> {
+    const response = await this.recoveryRequest('verify', { type: 'recovery', email, token });
+    if ([400, 401, 403, 404, 422, 429].includes(response.status)) throw invalidRecovery();
+    if (!response.ok) throw recoveryUnavailable();
+    const body = deserialize<TokenResponse>(await response.text());
+    if (!body) throw invalidRecovery();
+    const session = toSession(body);
+    if (session.expiresAtUtc.getTime() <= Date.now()) throw invalidRecovery();
+    return session;
+  }
 
-    ensureSuccess(response, 'Falha ao redefinir a senha no Supabase Auth.');
+  async updateOwnPassword(accessToken: string, password: string): Promise<void> {
+    const response = await this.recoveryRequest('user', { password }, 'PUT', accessToken);
+    if ([401, 403].includes(response.status)) throw invalidRecovery();
+    if ([400, 422].includes(response.status)) throw new DomainException('A nova senha não atende às regras de segurança. Solicite outro código e tente novamente.');
+    if (!response.ok) throw recoveryUnavailable();
+    // Encerra as sessões de atualização/refresh. JWTs já emitidos expiram conforme a política do provedor.
+    const logout = await this.recoveryRequest('logout?scope=global', undefined, 'POST', accessToken);
+    if (!logout.ok && logout.status !== 401) throw recoveryUnavailable();
+  }
+
+  private async recoveryRequest(path: string, body: unknown, method = 'POST', token = this.options.anonKey): Promise<Response> {
+    try {
+      return await this.fetcher(new URL(`auth/v1/${path}`, this.baseUrl), {
+        method, headers: { apikey: this.options.anonKey, Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: AbortSignal.timeout(15000)
+      });
+    } catch { throw recoveryUnavailable(); }
   }
 
   private async send(path: string, key: string, body: unknown, method = 'POST'): Promise<Response> {
@@ -204,6 +228,9 @@ export class SupabaseAuthClient implements ISupabaseAuthClient {
     }
   }
 }
+
+const invalidRecovery = () => new UnauthorizedException('Código inválido ou expirado.');
+const recoveryUnavailable = () => new ServicoIndisponivelException('Não foi possível processar a recuperação de senha. Tente novamente mais tarde.');
 
 function isConflict(response: Response, payload: string): boolean {
   const body = deserialize<{ error_code?: string; code?: string }>(payload);

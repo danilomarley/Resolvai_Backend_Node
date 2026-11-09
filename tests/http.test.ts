@@ -8,8 +8,14 @@ import { UnauthorizedException } from '../src/application/errors.js';
 import { AssistentePedidoService } from '../src/application/services/assistente-pedido-service.js';
 import { AuthService } from '../src/application/services/auth-service.js';
 import { FornecedorService } from '../src/application/services/fornecedor-service.js';
+import { AvaliacaoService } from '../src/application/services/avaliacao-service.js';
+import { PropostaFornecedorService } from '../src/application/services/proposta-fornecedor-service.js';
+import type { IPropostaFornecedorRepository } from '../src/application/dtos/propostas-fornecedor.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
+import { PropostaService } from '../src/application/services/proposta-service.js';
+import { PrestadorService, type IPrestadorRepository } from '../src/application/services/prestador-service.js';
+import { PropostaPrestadorService, type IPropostaPrestadorRepository } from '../src/application/services/proposta-prestador-service.js';
 import { UserService } from '../src/application/services/user-service.js';
 import { Email } from '../src/domain/email.js';
 import { UserRole } from '../src/domain/enums.js';
@@ -22,10 +28,12 @@ import {
   FakeFornecedores,
   FakeEnderecos,
   FakePedidoRepository,
+  FakePropostaRepository,
   FakeQueries,
   FakeSupabase,
   FakeUsers,
-  pedidoDeTeste
+  pedidoDeTeste,
+  propostaDeTeste
 } from './fakes.js';
 
 const issuer = 'https://projeto-teste.supabase.co/auth/v1';
@@ -46,6 +54,7 @@ describe('API HTTP', () => {
   let app: FastifyInstance;
   let users: FakeUsers;
   let queries: FakeQueries;
+  let propostas: FakePropostaRepository;
   let supabase: FakeSupabase;
   const clienteId = randomUUID();
   const adminId = randomUUID();
@@ -53,17 +62,24 @@ describe('API HTTP', () => {
   beforeAll(async () => {
     users = new FakeUsers();
     queries = new FakeQueries();
+    propostas = new FakePropostaRepository();
     supabase = new FakeSupabase();
     const fornecedores = new FakeFornecedores();
     const especialidades = new FakeEspecialidades();
+    const fornecedorService = new FornecedorService(users, fornecedores, especialidades, supabase);
     app = await buildApp({
       dependencias: {
+        avaliacaoService: new AvaliacaoService({ async criar() { return 'notFound'; }, async consultar() { return undefined; }, async resumo() { return { count: 0, averageRating: null }; } }),
         userRepository: users,
         authService: new AuthService(users, supabase, fornecedores),
-        fornecedorService: new FornecedorService(users, fornecedores, especialidades, supabase),
+        fornecedorService,
+        propostaFornecedorService: new PropostaFornecedorService(fornecedorService, {} as IPropostaFornecedorRepository, new FakeArmazenamento()),
         especialidadeQueries: especialidades,
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
+        propostaService: new PropostaService(propostas, queries),
+        prestadorService: new PrestadorService({ async listCategorias() { return []; } } as unknown as IPrestadorRepository, users),
+        propostaPrestadorService: new PropostaPrestadorService({} as unknown as IPropostaPrestadorRepository, fornecedorService),
         fotoPedidoService: new FotoPedidoService(new FakeArmazenamento(), users),
         assistentePedidoService: new AssistentePedidoService(new FakeAssistente()),
         verificarToken: criarVerificadorDeToken({ authIssuer: issuer, audience: 'authenticated', jwtSecret: segredo })
@@ -80,6 +96,11 @@ describe('API HTTP', () => {
     void users.add(cliente);
     void users.add(User.register(adminId, 'Admin', Email.create('admin@teste.com'), UserRole.Admin));
     queries.pedido = null;
+    propostas.propostas = [];
+    propostas.detalhe = null;
+    propostas.markResult = true;
+    propostas.marked = 0;
+    propostas.calls = 0;
     supabase.erro = undefined;
   });
 
@@ -87,6 +108,22 @@ describe('API HTTP', () => {
     app.inject({ method: 'GET', url, headers: sub ? { authorization: `Bearer ${await token(sub)}` } : {} });
 
   describe('autenticação', () => {
+    it('conclui perfil profissional somente para a própria conta autenticada de Prestador', async () => {
+      const url = '/api/v1/fornecedores/me/complete-registration';
+      const payload = { name: 'Fornecedor Legado', tipoPessoa: 'PF', cpf: '52998224725', nomeExibicao: 'Fornecedor Legado',
+        telefone: '85999999999', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', especialidades: ['eletrica'] };
+      expect((await app.inject({ method: 'POST', url, payload })).statusCode).toBe(401);
+      expect((await app.inject({ method: 'POST', url, payload, headers: { authorization: `Bearer ${await token(clienteId)}` } })).statusCode).toBe(403);
+      const prestadorId = randomUUID();
+      await users.add(User.register(prestadorId, 'Legado', Email.create('legado-http@teste.com'), UserRole.Prestador));
+      const headers = { authorization: `Bearer ${await token(prestadorId)}` };
+      expect((await app.inject({ method: 'POST', url, payload: { ...payload, email: 'outra@teste.com' }, headers })).statusCode).toBe(400);
+      const response = await app.inject({ method: 'POST', url, payload, headers });
+      expect(response.statusCode).toBe(201);
+      expect(response.json()).toMatchObject({ idUsuario: prestadorId, tipoPessoa: 'PF', email: 'legado-http@teste.com' });
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect((await app.inject({ method: 'POST', url, payload, headers })).statusCode).toBe(409);
+    });
     it.each(['/api/v1/auth/register-provider', '/api/v1/auth/register'])('limita cadastro por IP antes da criacao privilegiada: %s', async url => {
       const respostas = [];
       for (let i = 0; i < 11; i++) respostas.push(await app.inject({ method: 'POST', url, payload: {}, remoteAddress: '203.0.113.20' }));
@@ -107,13 +144,14 @@ describe('API HTTP', () => {
       expect((await app.inject({ method: 'GET', url: '/api/v1/users', headers: { authorization: `Bearer ${jwt}` } })).statusCode).toBe(403);
     });
 
-    it('reset exige Bearer e so altera o sujeito verificado', async () => {
-      const payload = { email: 'admin@teste.com', newPassword: 'SenhaNova123' };
-      expect((await app.inject({ method: 'POST', url: '/api/v1/auth/reset-password', payload })).statusCode).toBe(401);
-      const resposta = await app.inject({ method: 'POST', url: '/api/v1/auth/reset-password', payload,
-        headers: { authorization: `Bearer ${await token(clienteId)}` } });
+    it('alteração autenticada exige Bearer e usa a sessão do sujeito verificado', async () => {
+      const payload = { newPassword: 'SenhaNova123' };
+      expect((await app.inject({ method: 'POST', url: '/api/v1/auth/change-password', payload })).statusCode).toBe(401);
+      const jwt = await token(clienteId);
+      const resposta = await app.inject({ method: 'POST', url: '/api/v1/auth/change-password', payload,
+        headers: { authorization: `Bearer ${jwt}` } });
       expect(resposta.statusCode).toBe(200);
-      expect(supabase.senhasAlteradas.at(-1)?.userId).toBe(clienteId);
+      expect(supabase.senhasAlteradas.at(-1)?.userId).toBe('sessao-verificada');
     });
 
     it('check-email retorna a mesma resposta para conta existente e ausente', async () => {
@@ -322,6 +360,80 @@ describe('API HTTP', () => {
       expect(doc.paths['/api/v1/orders'].get.security).toEqual([{ Bearer: [] }]);
       expect(doc.paths['/api/v1/auth/login'].post.security).toBeUndefined();
       expect((await app.inject({ method: 'GET', url: '/swagger/' })).statusCode).toBe(200);
+    });
+  });
+  describe('propostas do pedido (#83)', () => {
+    const pedidoId = randomUUID();
+    const propostaId = randomUUID();
+
+    it('exige autenticação', async () => {
+      expect((await get(`/api/v1/orders/${pedidoId}/proposals`)).statusCode).toBe(401);
+      expect((await get(`/api/v1/orders/${pedidoId}/proposals/${propostaId}`)).statusCode).toBe(401);
+    });
+
+    it('lista com os padrões do contrato (preço crescente) e sem cache', async () => {
+      propostas.propostas = [propostaDeTeste(propostaId, { value: 900, deadlineDays: 5, providerRating: { average: 4.5, count: 2 } })];
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals`, clienteId);
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.headers['cache-control']).toBe('no-store,no-cache');
+      expect(propostas.lastList).toEqual({ orderId: pedidoId, customerId: clienteId, sort: 'price', direction: 'asc' });
+      expect(resposta.json()).toEqual([
+        expect.objectContaining({ id: propostaId, value: 900, deadlineDays: 5, providerRating: { average: 4.5, count: 2 }, createdAt: expect.any(String) })
+      ]);
+      expect(resposta.json()[0]).not.toHaveProperty('description');
+    });
+
+    it('repassa sort e direction sem diferenciar maiúsculas; rating começa pelo melhor', async () => {
+      await get(`/api/v1/orders/${pedidoId}/proposals?sort=DEADLINE&direction=Desc`, clienteId);
+      expect(propostas.lastList).toMatchObject({ sort: 'deadline', direction: 'desc' });
+      await get(`/api/v1/orders/${pedidoId}/proposals?sort=rating`, clienteId);
+      expect(propostas.lastList).toMatchObject({ sort: 'rating', direction: 'desc' });
+    });
+
+    it('ordenação inválida responde 400 no formato do ModelState, sem consultar', async () => {
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals?sort=nome&direction=lado`, clienteId);
+      expect(resposta.statusCode).toBe(400);
+      expect(Object.keys(resposta.json().errors).sort()).toEqual(['Direction', 'Sort']);
+      expect(propostas.calls).toBe(0);
+    });
+
+    it('pedido inexistente ou de outro cliente responde 404', async () => {
+      propostas.propostas = null;
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals`, clienteId);
+      expect(resposta.statusCode).toBe(404);
+      expect(resposta.json()).toMatchObject({ detail: `Pedido '${pedidoId}' não foi encontrado.`, instance: `GET /api/v1/orders/${pedidoId}/proposals` });
+    });
+
+    it('ids fora do formato Guid respondem 404 sem consultar', async () => {
+      expect((await get('/api/v1/orders/abc/proposals', clienteId)).statusCode).toBe(404);
+      expect((await get(`/api/v1/orders/${pedidoId}/proposals/abc`, clienteId)).statusCode).toBe(404);
+      expect((await get(`/api/v1/orders/abc/proposals/${propostaId}`, clienteId)).statusCode).toBe(404);
+      expect(propostas.calls).toBe(0);
+    });
+
+    it('detalhe devolve o resumo do prestador e marca como visualizada', async () => {
+      propostas.detalhe = {
+        ...propostaDeTeste(propostaId),
+        providerProfile: { memberSince: '2026-01-10T12:00:00.000Z', completedServices: 3 }
+      };
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals/${propostaId}`, clienteId);
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.headers['cache-control']).toBe('no-store,no-cache');
+      expect(resposta.json()).toMatchObject({ id: propostaId, status: 'Viewed', providerProfile: { completedServices: 3 } });
+      expect(propostas.marked).toBe(1);
+      expect(propostas.lastDetail).toEqual({ orderId: pedidoId, proposalId: propostaId, customerId: clienteId });
+    });
+
+    it('proposta inexistente responde 404 com detail', async () => {
+      const resposta = await get(`/api/v1/orders/${pedidoId}/proposals/${propostaId}`, clienteId);
+      expect(resposta.statusCode).toBe(404);
+      expect(resposta.json().detail).toBe(`Proposta '${propostaId}' não foi encontrado.`);
+    });
+
+    it('publica as rotas autenticadas no OpenAPI', async () => {
+      const doc = (await app.inject({ method: 'GET', url: '/openapi/v1.json' })).json();
+      expect(doc.paths['/api/v1/orders/{id}/proposals'].get.security).toEqual([{ Bearer: [] }]);
+      expect(doc.paths['/api/v1/orders/{id}/proposals/{proposalId}'].get.tags).toEqual(['Propostas']);
     });
   });
 });

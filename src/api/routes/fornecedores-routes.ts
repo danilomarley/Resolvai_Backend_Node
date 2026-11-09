@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { IEspecialidadeQueries } from '../../application/contracts.js';
-import { atualizarFornecedorRequestSchema, especialidadeResponseSchema, fornecedorResponseSchema, registerFornecedorRequestSchema } from '../../application/dtos/fornecedores.js';
+import { atualizarFornecedorRequestSchema, completeFornecedorRequestSchema, especialidadeResponseSchema, fornecedorResponseSchema, registerFornecedorRequestSchema } from '../../application/dtos/fornecedores.js';
 import type { FornecedorService } from '../../application/services/fornecedor-service.js';
 import { LimitadorDeTentativas } from '../limitador.js';
 import { listarOportunidadesQuerySchema, oportunidadeDetalheSchema, oportunidadesResponseSchema } from '../../application/dtos/oportunidades.js';
@@ -27,6 +27,10 @@ export function fornecedoresRoutes(service: FornecedorService) {
   return async (app: FastifyInstance) => {
     app.addHook('preHandler', async (_request, reply) => { reply.header('Cache-Control', 'no-store'); });
     const rotas = app.withTypeProvider<ZodTypeProvider>();
+    rotas.post('/api/v1/fornecedores/me/complete-registration', {
+      schema: { tags: ['Fornecedores'], summary: 'Completa o perfil PF/PJ da própria conta de Prestador existente.', body: completeFornecedorRequestSchema, response: { 201: fornecedorResponseSchema } },
+      handler: async (request, reply) => reply.code(201).header('Location', '/api/v1/fornecedores/me').send(await service.completeCurrent(request.usuario, request.body))
+    });
     rotas.get('/api/v1/fornecedores/me/oportunidades', {
       schema: { tags: ['Oportunidades'], summary: 'Lista pedidos abertos compatíveis com as especialidades do Prestador autenticado.', querystring: listarOportunidadesQuerySchema, response: { 200: oportunidadesResponseSchema } },
       handler: request => service.listOpportunities(request.usuario, request.query)

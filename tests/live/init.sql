@@ -1,0 +1,10 @@
+create role supabase_auth_admin login password 'isolated-test-only';
+create schema auth authorization supabase_auth_admin;
+grant all on database resolvai_security_test to supabase_auth_admin;
+alter role supabase_auth_admin set search_path = auth, public;
+create extension if not exists pgcrypto;
+create extension if not exists "uuid-ossp";
+create schema storage;
+create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
+create table public.test_guard (marker text primary key);
+insert into public.test_guard values ('password-security-ephemeral');

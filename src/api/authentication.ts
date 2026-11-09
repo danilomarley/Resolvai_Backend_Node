@@ -112,6 +112,15 @@ export async function exigirAdmin(request: FastifyRequest, reply: FastifyReply) 
   }
 }
 
+/**
+ * 403 para quem está autenticado sem o papel Prestador (rotas do app do prestador).
+ */
+export async function exigirPrestador(request: FastifyRequest, reply: FastifyReply) {
+  if (request.usuario.role !== UserRole.Prestador) {
+    return enviarProblema(reply, 403);
+  }
+}
+
 function extrairBearer(header: string | undefined): string | undefined {
   const match = header?.match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || undefined;

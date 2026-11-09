@@ -12,6 +12,7 @@ O módulo usa o Fastify/TypeScript/pg existente. A conexão continua configurada
 | GET | `/api/v1/especialidades` | Público; lista ativa de `{ "codigo": "...", "nome": "..." }` |
 | GET | `/api/v1/fornecedores/me` | Bearer de Prestador ativo; 200 com o próprio perfil |
 | PATCH | `/api/v1/fornecedores/me` | Bearer de Prestador ativo; 200 com os dados persistidos |
+| POST | `/api/v1/fornecedores/me/complete-registration` | Bearer de Prestador ativo sem perfil profissional; 201 com o perfil completo vinculado ao UUID existente |
 
 Login e refresh usam exclusivamente o UUID devolvido pelo Auth para encontrar o perfil local. O papel vem de `users.role`, nunca de metadados editáveis ou da simples igualdade de e-mail. GET/PATCH não aceitam UUID de outro usuário na URL ou no corpo.
 
@@ -26,11 +27,14 @@ O cadastro profissional mantém os campos do C#:
 | `cnpj` | PJ: CNPJ válido numérico ou alfanumérico; PF: ausente ou nulo |
 | `telefone` | DDD e 10 ou 11 dígitos; aceita pontuação usual, persiste somente dígitos |
 | `cidadeAtuacao`, `ufAtuacao` | Cidade obrigatória até 120 caracteres; UF brasileira, normalizada para maiúsculas |
+| `cidadesAtuacao` | Lista opcional de cidades atendidas, incluindo a principal; normaliza espaços e remove repetições sem diferença de acentos/maiúsculas |
 | `raioAtendimentoKm` | Inteiro de 1 a 200; padrão 20 no cadastro |
 | `bio`, `registroProfissional` | Opcionais, aceitam nulo; até 360 e 80 caracteres |
 | `especialidades` | De 1 a 100 códigos existentes e ativos; remove repetições e ordena |
 
 Contas Cliente e Prestador usam e-mails e UUIDs distintos. O mesmo CPF pode existir em papéis diferentes; dentro do papel Prestador ele é único. CNPJ também é único. PJ mantém `users.cpf` nulo.
+
+Contas de Prestador anteriores a este módulo concluem o perfil com `complete-registration`, enviando o cadastro profissional sem `email` e `password`. CPF previamente cadastrado é preservado e pode ser omitido no corpo PF; tentar alterá-lo ou converter silenciosamente uma conta com CPF em PJ retorna 409. O fluxo exige o Bearer da própria conta e não chama criação de usuário no Auth.
 
 O PATCH recebe o conjunto completo de campos editáveis: `name`, `nomeExibicao`, `telefone`, `cidadeAtuacao`, `ufAtuacao`, `raioAtendimentoKm` e `especialidades`; `bio` e `registroProfissional` podem ser nulos ou omitidos para limpar. Campos extras, incluindo `email`, `tipoPessoa`, `cpf` e `cnpj`, são rejeitados com 400. A rota genérica de finalização de cadastro é exclusiva de Cliente; Prestador também deve editar seu perfil pela rota profissional.
 
@@ -54,11 +58,13 @@ As rotas públicas de cadastro Cliente e Prestador têm limite de 10 tentativas 
 
 400: campos/documentos/especialidades inválidos ou rejeição explícita da senha. 401: Bearer inválido, UUID sem perfil local ou conta inativa. 403: outro papel tentando acesso profissional ou cadastro por e-mail desabilitado no projeto. 404: Prestador sem perfil profissional. 409: duplicidade ou retomada sem prova de posse. 429: limite de tentativas. 503: indisponibilidade do Auth/settings/confirmação ou cadastro cuja conclusão não pôde ser confirmada. Falhas locais inesperadas na edição retornam erro genérico 500 e fazem rollback; detalhes do driver não vão para a resposta.
 
-`POST /auth/reset-password` exige Bearer e recebe somente `newPassword`, com 8–128 caracteres. O backend altera a senha do UUID verificado; o campo `email` legado não escolhe o alvo. `POST /auth/check-email` não consulta a existência da conta e não envia e-mail: devolve uma mensagem uniforme. Recuperação de acesso precisa do fluxo verificado do Supabase Auth, configurado separadamente. Limites em memória continuam por instância.
+`POST /api/v1/auth/reset-password` recebe `{email, token, newPassword}` e valida OTP de recuperação. O fluxo por link usa `/api/v1/auth/forgot-password` com `{email, redirectTo}`. A alteração por sessão usa `/api/v1/auth/change-password` com Bearer e somente `{newPassword}`, de 8–128 caracteres; campos extras de identidade são rejeitados. `check-email` solicita recuperação com resposta uniforme. Limites em memória continuam por instância. Veja [os contratos conciliados](CONCILIACAO-PR8.md).
 
 ## Banco existente e verificação local
 
 As tabelas profissionais e `UNIQUE(cpf, role)` já existem no banco remoto. `013_create_fornecedores.sql`, `014_create_especialidades_fornecedor.sql` e `015_users_cpf_por_papel.sql` são referências versionadas para reconstrução isolada; não devem ser reaplicadas no Supabase existente. O número 012 continua reservado ao bucket de pedidos. Nenhum script é executado automaticamente pela API.
+
+A migração em `supabase/migrations/20261109014627_reconcile_fornecedor_prestador.sql` concilia os requisitos da main e preenche os vínculos profissionais existentes. Categorias/especialidades e cidades das duas APIs são sincronizadas nas transações de cadastro/edição. Consulte [a ordem e os cuidados de aplicação](CONCILIACAO-PR8.md).
 
 As tabelas profissionais têm RLS e privilégios diretos de `anon`/`authenticated` revogados; a aplicação faz a autorização pelo UUID, papel e conta local ativa antes de usar o repositório SQL do servidor.
 

@@ -4,9 +4,9 @@ import { Email } from '../src/domain/email.js';
 import { UserRole } from '../src/domain/enums.js';
 import { User } from '../src/domain/user.js';
 import { FornecedorService } from '../src/application/services/fornecedor-service.js';
-import { PropostaService } from '../src/application/services/proposta-service.js';
+import { PropostaFornecedorService } from '../src/application/services/proposta-fornecedor-service.js';
 import { NotFoundException } from '../src/application/errors.js';
-import type { CriarProposta, IPropostaRepository, PropostaEnviada, PropostaRegistro } from '../src/application/dtos/propostas.js';
+import type { CriarProposta, IPropostaFornecedorRepository, PropostaEnviada, PropostaRegistro } from '../src/application/dtos/propostas-fornecedor.js';
 import { FakeEspecialidades, FakeFornecedores, FakeSupabase, FakeUsers } from './fakes.js';
 
 function setup() {
@@ -19,7 +19,7 @@ function setup() {
     bio: null, telefone: '85999990000', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', raioAtendimentoKm: 20, registroProfissional: null, especialidades: ['eletrica'], createdAt: new Date().toISOString(), updatedAt: null });
   const data: CriarProposta = { requestId: randomUUID(), valueCents: 10000, deadline: '3 dias', description: 'Diagnóstico e reparo completo do circuito.', guaranteePeriod: '90 dias', guaranteeType: 'Reexecução gratuita', materials: undefined, guaranteeConditions: undefined };
   let stored: PropostaRegistro | null = null;
-  const repository: IPropostaRepository = {
+  const repository: IPropostaFornecedorRepository = {
     find: async () => stored,
     assertAvailable: async () => {},
     create: async (_order, _provider, _data, hash, portfolio) => {
@@ -30,7 +30,7 @@ function setup() {
     }
   };
   const storage = { enviar: vi.fn(async (path: string) => `https://storage.invalid/${path}`), remover: vi.fn(async (_paths: string[]) => {}) };
-  const service = new PropostaService(new FornecedorService(users, profiles, new FakeEspecialidades(), new FakeSupabase()), repository, storage);
+  const service = new PropostaFornecedorService(new FornecedorService(users, profiles, new FakeEspecialidades(), new FakeSupabase()), repository, storage);
   const photo = { conteudo: Buffer.from([137,80,78,71,13,10,26,10,0]), contentType: 'image/png', name: 'portfolio.png' };
   return { provider, order, data, photo, repository, storage, service };
 }

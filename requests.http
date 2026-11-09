@@ -107,14 +107,14 @@ Content-Type: application/json
   ]
 }
 
-### Resposta pública uniforme (não verifica existência nem envia e-mail)
+### Solicita recuperação com resposta pública uniforme
 POST {{host}}/api/v1/auth/check-email
 Content-Type: application/json
 
 { "email": "maria.souza@example.com" }
 
 ### Alterar a própria senha com Bearer verificado
-POST {{host}}/api/v1/auth/reset-password
+POST {{host}}/api/v1/auth/change-password
 Content-Type: application/json
 Authorization: Bearer {{token}}
 
@@ -151,9 +151,74 @@ Authorization: Bearer {{token}}
 GET {{host}}/api/v1/orders/{{orderId}}
 Authorization: Bearer {{token}}
 
+### Propostas recebidas pelo pedido (sort: price, deadline ou rating; direction: asc ou desc)
+GET {{host}}/api/v1/orders/{{orderId}}/proposals?sort=rating
+Authorization: Bearer {{token}}
+
+### Detalhe da proposta, com o resumo do prestador (marca como visualizada)
+GET {{host}}/api/v1/orders/{{orderId}}/proposals/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{token}}
+
 ### Resumo da Home (dados dos cards e pedidos recentes)
 GET {{host}}/api/v1/home/summary
 Authorization: Bearer {{token}}
 
 ### Documento OpenAPI de todas as rotas
 GET {{host}}/openapi/v1.json
+
+### ---------------------------------------------------------------------------------------------
+### App do prestador (docs/PRESTADOR.md). Use o token de um usuário Prestador.
+### ---------------------------------------------------------------------------------------------
+
+### Cadastro público do prestador
+POST {{host}}/api/v1/auth/register-provider
+Content-Type: application/json
+
+{
+  "name": "Paulo Eletricista", "email": "paulo@example.com", "password": "SenhaForte123",
+  "tipoPessoa": "PF", "cpf": "52998224725", "nomeExibicao": "Paulo Elétrica",
+  "telefone": "85999999999", "cidadeAtuacao": "Fortaleza", "ufAtuacao": "CE",
+  "cidadesAtuacao": ["Fortaleza", "Caucaia"], "especialidades": ["eletrica"]
+}
+
+### Conclui perfil completo da própria conta profissional já existente
+POST {{host}}/api/v1/fornecedores/me/complete-registration
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Paulo Eletricista", "tipoPessoa": "PF", "cpf": "52998224725",
+  "nomeExibicao": "Paulo Elétrica", "telefone": "85999999999",
+  "cidadeAtuacao": "Fortaleza", "ufAtuacao": "CE",
+  "cidadesAtuacao": ["Fortaleza", "Caucaia"], "especialidades": ["eletrica"]
+}
+
+### Categorias de serviço
+GET {{host}}/api/v1/catalog/categories
+Authorization: Bearer {{token}}
+
+### Define categorias e cidades de atuação
+PUT {{host}}/api/v1/provider/profile
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "categoryIds": ["00000000-0000-0000-0000-000000000000"], "cities": ["Fortaleza"] }
+
+### Feed de pedidos abertos (compatíveis primeiro)
+GET {{host}}/api/v1/provider/orders?compatible=true&page=1
+Authorization: Bearer {{token}}
+
+### Envia proposta
+POST {{host}}/api/v1/provider/orders/{{orderId}}/proposals
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "value": 450.50, "deadlineDays": 10, "description": "Troco a tomada e testo o circuito", "warranty": "90 dias" }
+
+### Minhas propostas
+GET {{host}}/api/v1/provider/proposals?status=Sent
+Authorization: Bearer {{token}}
+
+### Contratante aceita uma proposta (pedido continua Pending até o pagamento)
+POST {{host}}/api/v1/orders/{{orderId}}/proposals/00000000-0000-0000-0000-000000000000/accept
+Authorization: Bearer {{token}}

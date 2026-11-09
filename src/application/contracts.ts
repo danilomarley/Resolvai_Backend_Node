@@ -76,12 +76,13 @@ export interface SupabaseSession {
 }
 
 export interface ISupabaseAuthClient {
-  requestPasswordRecovery(email: string, redirectTo: string): Promise<void>;
+  requestPasswordRecovery(email: string, redirectTo?: string): Promise<void>;
   refreshSession(refreshToken: string): Promise<SupabaseSession>;
   signInWithPassword(email: string, password: string): Promise<SupabaseSession>;
   signUp(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
   adminCreateUser(email: string, password: string, name: string): Promise<SupabaseAuthUser>;
-  adminUpdatePassword(userId: string, password: string): Promise<void>;
+  verifyPasswordRecovery(email: string, token: string): Promise<SupabaseSession>;
+  updateOwnPassword(accessToken: string, password: string): Promise<void>;
 }
 
 export interface IEspecialidadeQueries {
@@ -92,6 +93,7 @@ export interface IFornecedorRepository {
   existsByCnpj(cnpj: string): Promise<boolean>;
   getByUsuarioId(id: string): Promise<FornecedorResponse | null>;
   addComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
+  completeExisting(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
   updateComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void>;
 }
 

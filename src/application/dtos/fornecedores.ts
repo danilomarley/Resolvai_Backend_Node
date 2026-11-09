@@ -7,6 +7,7 @@ const editaveis = {
   nomeExibicao: textoObrigatorio('NomeExibicao', 200),
   telefone: textoObrigatorio('Telefone', 20),
   cidadeAtuacao: textoObrigatorio('CidadeAtuacao', 120),
+  cidadesAtuacao: z.array(textoObrigatorio('CidadesAtuacao', 120, 2)).min(1).max(30).optional(),
   ufAtuacao: z.string().length(2),
   raioAtendimentoKm: z.number().int().min(1).max(200),
   bio: textoOpcional('Bio', 360),
@@ -23,6 +24,10 @@ export const registerFornecedorRequestSchema = registerRequestSchema.extend({
 }).strict();
 export type RegisterFornecedorRequest = z.output<typeof registerFornecedorRequestSchema>;
 
+/** Authenticated completion binds the existing identity exclusively to the verified Bearer subject. */
+export const completeFornecedorRequestSchema = registerFornecedorRequestSchema.omit({ email: true, password: true }).strict();
+export type CompleteFornecedorRequest = z.output<typeof completeFornecedorRequestSchema>;
+
 export const atualizarFornecedorRequestSchema = z.object(editaveis).strict();
 export type AtualizarFornecedorRequest = z.output<typeof atualizarFornecedorRequestSchema>;
 
@@ -32,6 +37,7 @@ export const fornecedorResponseSchema = z.object({
   name: z.string(), email: z.string(), cpf: z.string().optional(), telefone: z.string(),
   nomeExibicao: z.string(), cnpj: z.string().nullable(), bio: z.string().nullable(),
   cidadeAtuacao: z.string(), ufAtuacao: z.string(), raioAtendimentoKm: z.number(),
+  cidadesAtuacao: z.array(z.string()).optional(),
   registroProfissional: z.string().nullable(), especialidades: z.array(z.string()),
   createdAt: z.string(), updatedAt: z.string().nullable()
 });

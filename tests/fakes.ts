@@ -17,7 +17,9 @@ import type {
 } from '../src/application/contracts.js';
 import { criarPagina, type PaginaResponse } from '../src/application/dtos/common.js';
 import type { ResumoHomeResponse } from '../src/application/dtos/home.js';
-import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse } from '../src/application/dtos/pedidos.js';
+import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse, PropostaResponse } from '../src/application/dtos/pedidos.js';
+import type { DirecaoPropostas, OrdenacaoPropostas, PropostaDetalheResponse } from '../src/application/dtos/propostas.js';
+import type { IPropostaRepository, ResultadoAceite } from '../src/application/services/proposta-service.js';
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
@@ -25,6 +27,7 @@ import type { StatusPedido, UserRole } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
 import type { Fornecedor } from '../src/domain/fornecedor.js';
 import type { FornecedorResponse } from '../src/application/dtos/fornecedores.js';
+import { UnauthorizedException } from '../src/application/errors.js';
 
 export const usuario = (id?: string, extra: Partial<CurrentUser> = {}): CurrentUser => ({
   isAuthenticated: true,
@@ -78,6 +81,53 @@ export class FakeQueries implements IPedidoQueries {
   private record(userId: string) {
     this.calls++;
     this.lastUserId = userId;
+  }
+}
+
+export function propostaDeTeste(id: string, extra: Partial<PropostaResponse> = {}): PropostaResponse {
+  return {
+    id,
+    providerId: '50000000-0000-4000-8000-000000000001',
+    providerName: 'Pedro Prestador',
+    status: 'Sent',
+    value: 500,
+    createdAt: new Date().toISOString(),
+    providerRating: { average: null, count: 0 },
+    ...extra
+  };
+}
+
+export class FakePropostaRepository implements IPropostaRepository {
+  propostas: PropostaResponse[] | null = [];
+  detalhe: PropostaDetalheResponse | null = null;
+  markResult = true;
+  acceptResult: ResultadoAceite = 'ok';
+  accepted = 0;
+  marked = 0;
+  calls = 0;
+  lastList?: { orderId: string; customerId: string; sort: OrdenacaoPropostas; direction: DirecaoPropostas };
+  lastDetail?: { orderId: string; proposalId: string; customerId: string };
+
+  async list(orderId: string, customerId: string, sort: OrdenacaoPropostas, direction: DirecaoPropostas) {
+    this.calls++;
+    this.lastList = { orderId, customerId, sort, direction };
+    return this.propostas;
+  }
+
+  async getById(orderId: string, proposalId: string, customerId: string) {
+    this.calls++;
+    this.lastDetail = { orderId, proposalId, customerId };
+    return this.detalhe;
+  }
+
+  async markViewed() {
+    this.marked++;
+    return this.markResult;
+  }
+
+  async accept() {
+    this.accepted++;
+    return this.acceptResult;
   }
 }
 
@@ -191,8 +241,8 @@ export class FakeAssistente implements IAssistentePedido {
 }
 
 export class FakeSupabase implements ISupabaseAuthClient {
-  readonly recuperacoes: { email: string; redirectTo: string }[] = [];
-  async requestPasswordRecovery(email: string, redirectTo: string) {
+  readonly recuperacoes: { email: string; redirectTo?: string }[] = [];
+  async requestPasswordRecovery(email: string, redirectTo?: string) {
     if (this.erro) throw this.erro;
     this.recuperacoes.push({ email, redirectTo });
   }
@@ -218,9 +268,17 @@ export class FakeSupabase implements ISupabaseAuthClient {
   }
 
   readonly senhasAlteradas: { userId: string; password: string }[] = [];
-  async adminUpdatePassword(userId: string, password: string) {
+  recoverySession?: SupabaseSession;
+  async verifyPasswordRecovery(_email: string, token: string) {
     if (this.erro) throw this.erro;
-    this.senhasAlteradas.push({ userId, password });
+    if (!this.recoverySession || token !== '123456') throw new UnauthorizedException('Código inválido ou expirado.');
+    const session = this.recoverySession;
+    this.recoverySession = undefined;
+    return session;
+  }
+  async updateOwnPassword(_accessToken: string, password: string) {
+    if (this.erro) throw this.erro;
+    this.senhasAlteradas.push({ userId: 'sessao-verificada', password });
   }
 }
 
@@ -239,6 +297,9 @@ export class FakeFornecedores implements IFornecedorRepository {
       createdAt: new Date().toISOString(), updatedAt: null });
   }
   async updateComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
+    return this.addComplete(user, fornecedor, contato, especialidades);
+  }
+  async completeExisting(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
     return this.addComplete(user, fornecedor, contato, especialidades);
   }
 }

@@ -12,7 +12,9 @@ Um pedido é elegível quando está `aberto`, não possui proposta `escolhida` e
 do fornecedor. A comparação ignora maiúsculas, acentos e espaços externos;
 códigos com `_` também podem corresponder ao nome com espaços. A comparação é
 de categoria inteira, sem inferir que uma categoria genérica como `Reformas`
-equivale a Elétrica, Alvenaria ou outra especialidade. Não há filtro geográfico.
+equivale a Elétrica, Alvenaria ou outra especialidade. A localização textual
+precisa conter uma das cidades atendidas do perfil profissional unificado.
+Essa comparação não calcula distância pelo raio em quilômetros.
 Pedidos do próprio usuário são excluídos.
 
 Parâmetros opcionais: `page` (padrão 1), `pageSize` (1–50, padrão 10), `search`
@@ -39,5 +41,5 @@ inexistente ou UUID inválido retorna 404. Todas as respostas usam `no-store`.
 
 Não há estimativa financeira, nota de IA, métrica de cliente ou região inferida.
 O envio de propostas usa as rotas descritas em [PROPOSTAS.md](PROPOSTAS.md),
-incluindo a extensão aditiva `016` da tabela existente. Os testes usam
+incluindo a [migração de conciliação](CONCILIACAO-PR8.md) para o banco existente. Os testes usam
 PostgreSQL isolado e HTTP simulado.

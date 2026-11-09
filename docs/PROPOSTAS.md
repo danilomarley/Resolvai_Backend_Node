@@ -11,15 +11,19 @@ opcionais `startDate` (YYYY-MM-DD), `materials`, `guaranteeConditions`.
 Campos de identidade, status, descontos e URLs fornecidos pelo cliente são
 rejeitados. O UUID do prestador vem exclusivamente do usuário autenticado.
 
-O pedido precisa estar aberto, sem proposta escolhida e corresponder a uma
-especialidade ativa do prestador. A condição é verificada novamente na
+O pedido precisa ser de outro usuário, estar aberto, sem proposta escolhida e corresponder a uma
+especialidade ativa e cidade atendida do prestador, com cadastro PF/PJ completo.
+A condição é verificada novamente na
 transação de gravação, com bloqueio do pedido e dos vínculos profissionais.
 
 `016_expand_propostas_form.sql` acrescenta data de início, materiais,
 garantia estruturada, portfólio JSON, hash de idempotência e data de criação.
-Preserva valor, prazo, descrição e garantia textual, para compatibilidade
+O envio também grava `prazo_dias` para a ordenação pelo contratante e reconhece
+o status `NotChosen` após o aceite de outra proposta. Preserva valor, prazo, descrição e garantia textual, para compatibilidade
 com as consultas de propostas dos clientes. RLS permanece habilitado e o
 acesso continua pela API Node; nenhuma credencial privada vai ao frontend.
+Para o banco existente, aplicar a [migração de conciliação](CONCILIACAO-PR8.md)
+após revisar o estado atual, preservando scripts já executados.
 
 As imagens são gravadas no bucket configurado, sob
 `propostas/{prestador}/{proposta}/{tentativa}/`. O JSON `portfolio` da tabela
@@ -38,6 +42,8 @@ O retorno 201 inclui os dados persistidos e `Location` para
 `GET /api/v1/fornecedores/me/oportunidades/{id}/propostas/{proposalId}`.
 Essa consulta só permite ler a própria proposta, inclusive após encerramento
 do pedido. O sucesso no frontend só aparece após uma resposta confirmada.
+Propostas legadas podem omitir prazo/descrição e os campos estruturados de
+garantia; `warranty.text` preserva a garantia textual disponível.
 
 O valor salvo é o total informado; a prévia de taxa ilustrativa não gera
 descontos, pagamentos, mensagens ou notificações. Testes de escrita usam banco

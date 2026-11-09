@@ -45,8 +45,15 @@ export const recuperarSenhaRequestSchema = verificarEmailRequestSchema.extend({
   redirectTo: z.url().max(2048)
 });
 
-export const redefinirSenhaRequestSchema = z.object({
+export const alterarSenhaRequestSchema = z.object({
   newPassword: textoObrigatorio('NewPassword', 128, 8)
+}).strict();
+
+export type AlterarSenhaRequest = z.output<typeof alterarSenhaRequestSchema>;
+
+export const redefinirSenhaRequestSchema = alterarSenhaRequestSchema.extend({
+  email: obrigatorio('Email').pipe(emailAddress('Email')).pipe(textoObrigatorio('Email', 320)),
+  token: z.string().regex(/^\d{6}$/, 'Informe o código de recuperação de 6 dígitos.')
 });
 
 export type RedefinirSenhaRequest = z.output<typeof redefinirSenhaRequestSchema>;
