@@ -29,6 +29,12 @@ Cada item contém `id`, `title`, `category`, `specialtyCode`, `createdAt`,
 `proposalsCount`, `location` e `urgency` opcionais. Sem resultados, `items` é
 vazio e os totais são zero. Os contadores e a página usam o mesmo snapshot.
 
+A listagem obtém itens, contagem e especialidades em uma única instrução SQL.
+O detalhe também consulta pedido, cliente/histórico e fotos em uma única instrução.
+Cada leitura usa o snapshot da própria instrução, sem abrir uma transação explícita
+com múltiplas idas ao banco remoto. Isso preserva os contratos e a elegibilidade,
+mas reduz o custo de rede de cada consulta nova, inclusive filtros ainda não vistos.
+
 `GET /api/v1/fornecedores/me/oportunidades/{id}` aplica a mesma elegibilidade e
 acrescenta descrição, detalhes, especificações e fotos reais do pedido.
 O campo `client` traz somente `name`, `memberSince`, `ordersCount` e
