@@ -7,14 +7,15 @@ O módulo usa o Fastify/TypeScript/pg existente. A conexão continua configurada
 | Método | Rota | Acesso e resposta |
 | --- | --- | --- |
 | POST | `/api/v1/auth/register-provider` | Público; 201 com perfil e `Location: /api/v1/fornecedores/me` |
-| POST | `/api/v1/auth/login-provider` | Email/password; 200 com `LoginResponse` existente após validar Prestador ativo e perfil profissional |
+| POST | `/api/v1/auth/login-provider` | Email/password; 200 com a sessão da conta original e `providerProfileStatus: pending/active` |
+| POST | `/api/v1/auth/refresh-provider` | Refresh token; sessão no contexto do Fornecedor, revalidando `providerProfileStatus` e a conta ativa |
 | POST | `/api/v1/auth/refresh` | `{ "refreshToken": "..." }`; 200 com `LoginResponse`, incluindo o novo refresh token quando devolvido pelo Auth |
 | GET | `/api/v1/especialidades` | Público; lista ativa de `{ "codigo": "...", "nome": "..." }` |
 | GET | `/api/v1/fornecedores/me` | Bearer de Prestador ativo; 200 com o próprio perfil |
 | PATCH | `/api/v1/fornecedores/me` | Bearer de Prestador ativo; 200 com os dados persistidos |
-| POST | `/api/v1/fornecedores/me/complete-registration` | Bearer de Prestador ativo sem perfil profissional; 201 com o perfil completo vinculado ao UUID existente |
+| POST | `/api/v1/fornecedores/me/complete-registration` | Bearer de Cliente ou Prestador ativo sem perfil profissional; 201 com o perfil completo vinculado ao UUID existente |
 
-Login e refresh usam exclusivamente o UUID devolvido pelo Auth para encontrar o perfil local. O papel vem de `users.role`, nunca de metadados editáveis ou da simples igualdade de e-mail. GET/PATCH não aceitam UUID de outro usuário na URL ou no corpo.
+Login e refresh usam exclusivamente o UUID devolvido pelo Auth para encontrar o perfil local. O papel original vem de `users.role`; um Cliente ganha capacidade profissional adicional pela existência do perfil em `fornecedores`. Esses dados são consultados no banco, nunca em metadados editáveis ou pela simples igualdade de e-mail. GET/PATCH não aceitam UUID de outro usuário na URL ou no corpo.
 
 O cadastro profissional mantém os campos do C#:
 
@@ -32,13 +33,25 @@ O cadastro profissional mantém os campos do C#:
 | `bio`, `registroProfissional` | Opcionais, aceitam nulo; até 360 e 80 caracteres |
 | `especialidades` | De 1 a 100 códigos existentes e ativos; remove repetições e ordena |
 
-Contas Cliente e Prestador usam e-mails e UUIDs distintos. O mesmo CPF pode existir em papéis diferentes; dentro do papel Prestador ele é único. CNPJ também é único. PJ mantém `users.cpf` nulo.
+Uma conta Cliente pode usar o mesmo e-mail, senha e UUID para ativar o perfil de Fornecedor. `users.role` continua `Cliente`, preservando criação de pedidos, fotos e avaliações. Não se cria outro usuário no Auth nem em `users`. A tabela `fornecedores`, cuja chave primária é o UUID da conta, representa essa capacidade adicional. Cadastros profissionais em contas distintas não podem repetir CPF; a verificação dentro da transação usa advisory lock por documento, incluindo contas Cliente já ativadas. CNPJ continua único. Um perfil PJ guarda seu CNPJ em `fornecedores` e preserva o CPF pessoal que já existia em `users`; no corpo PJ, `cpf` continua ausente ou nulo. Contas duplicadas anteriores não são mescladas automaticamente.
 
-Contas de Prestador anteriores a este módulo concluem o perfil com `complete-registration`, enviando o cadastro profissional sem `email` e `password`. CPF previamente cadastrado é preservado e pode ser omitido no corpo PF; tentar alterá-lo ou converter silenciosamente uma conta com CPF em PJ retorna 409. O fluxo exige o Bearer da própria conta e não chama criação de usuário no Auth.
+Contas de Prestador anteriores a este módulo concluem o perfil com `complete-registration`, enviando o cadastro profissional sem `email` e `password`. CPF previamente cadastrado é preservado e pode ser omitido no corpo PF; tentar alterá-lo retorna 409. Na ativação PJ, o CPF pessoal já existente não é removido. O fluxo exige o Bearer da própria conta e não chama criação de usuário no Auth. A mesma rota atende Cliente; nesse caso, preserva também seu nome pessoal e usa `nomeExibicao` para o nome profissional. E-mail, senha, papel e UUID não são aceitos no corpo. Administradores não podem se ativar por essa rota.
 
 O PATCH recebe o conjunto completo de campos editáveis: `name`, `nomeExibicao`, `telefone`, `cidadeAtuacao`, `ufAtuacao`, `raioAtendimentoKm` e `especialidades`; `bio` e `registroProfissional` podem ser nulos ou omitidos para limpar. Campos extras, incluindo `email`, `tipoPessoa`, `cpf` e `cnpj`, são rejeitados com 400. A rota genérica de finalização de cadastro é exclusiva de Cliente; Prestador também deve editar seu perfil pela rota profissional.
 
 POST, GET e PATCH retornam os campos profissionais do C#: `idUsuario`, `tipoPessoa`, `nomeExibicao`, `cnpj`, `bio`, `cidadeAtuacao`, `ufAtuacao`, `raioAtendimentoKm`, `registroProfissional`, `especialidades`, `createdAt` e `updatedAt`. A resposta acrescenta `name`, `email`, `cpf` opcional e `telefone`. CPF nulo é omitido; os campos profissionais opcionais são retornados como nulos. Não há senha ou token na resposta de cadastro/perfil. Respostas de perfil e sessão usam `Cache-Control: no-store`.
+
+## Ativação no portal do Fornecedor
+
+1. Login com a conta Cliente em `/auth/login-provider` retorna o papel original e status `pending`. A sessão permite concluir o cadastro, mas não acessar dados profissionais.
+2. O frontend abre `/ativar-fornecedor`, reaproveita nome, e-mail e CPF existentes e solicita os campos profissionais; não pede uma nova senha.
+3. `POST /fornecedores/me/complete-registration` grava o perfil e os vínculos em uma transação, com chave do usuário autenticado. Repetição/concor­rência retorna 409 sem duplicar o perfil.
+4. O perfil confirmado libera o painel. O refresh do Fornecedor usa `/auth/refresh-provider`; login e refresh genéricos do Cliente mantêm o contrato anterior.
+5. Pedidos próprios ficam fora dos feeds/detalhes profissionais e não aceitam proposta do próprio contratante. Propostas de terceiros continuam sujeitas à especialidade e à cidade.
+
+Nome pessoal e dados de contato pertencem à conta compartilhada. O nome profissional é separado em `nomeExibicao`. Se o Cliente escolher e-mail alternativo como contato principal, o telefone profissional é preservado. Telefones de contas compartilhadas seguem a validação profissional. Se a ativação preencher um CPF antes do endereço do Cliente, a finalização de cadastro do Cliente ainda permite cadastrar esse endereço usando o mesmo CPF.
+
+Não há nova migração, variável de ambiente ou chave para essa funcionalidade. Ela usa as tabelas canônicas e as migrações já necessárias ao módulo. Publique primeiro o backend e depois o frontend do Fornecedor. O repositório do Cliente não precisa mudar.
 
 ## Persistência e retomada
 
@@ -56,7 +69,7 @@ As rotas públicas de cadastro Cliente e Prestador têm limite de 10 tentativas 
 
 ## Erros e senha
 
-400: campos/documentos/especialidades inválidos ou rejeição explícita da senha. 401: Bearer inválido, UUID sem perfil local ou conta inativa. 403: outro papel tentando acesso profissional ou cadastro por e-mail desabilitado no projeto. 404: Prestador sem perfil profissional. 409: duplicidade ou retomada sem prova de posse. 429: limite de tentativas. 503: indisponibilidade do Auth/settings/confirmação ou cadastro cuja conclusão não pôde ser confirmada. Falhas locais inesperadas na edição retornam erro genérico 500 e fazem rollback; detalhes do driver não vão para a resposta.
+400: campos/documentos/especialidades inválidos ou rejeição explícita da senha. 401: Bearer inválido, UUID sem perfil local ou conta inativa. 403: Cliente ainda sem perfil profissional ou outro papel tentando acesso profissional ou cadastro por e-mail desabilitado no projeto. 404: Prestador sem perfil profissional. 409: duplicidade ou retomada sem prova de posse. 429: limite de tentativas. 503: indisponibilidade do Auth/settings/confirmação ou cadastro cuja conclusão não pôde ser confirmada. Falhas locais inesperadas na edição retornam erro genérico 500 e fazem rollback; detalhes do driver não vão para a resposta.
 
 `POST /api/v1/auth/reset-password` recebe `{email, token, newPassword}` e valida OTP de recuperação. O fluxo por link usa `/api/v1/auth/forgot-password` com `{email, redirectTo}`. A alteração por sessão usa `/api/v1/auth/change-password` com Bearer e somente `{newPassword}`, de 8–128 caracteres; campos extras de identidade são rejeitados. `check-email` solicita recuperação com resposta uniforme. Limites em memória continuam por instância. Veja [os contratos conciliados](CONCILIACAO-PR8.md).
 

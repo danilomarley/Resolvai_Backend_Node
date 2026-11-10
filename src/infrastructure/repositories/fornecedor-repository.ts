@@ -27,8 +27,8 @@ export class FornecedorRepository implements IFornecedorRepository {
              f.cidade_atuacao as "cidadeAtuacao", f.uf_atuacao as "ufAtuacao", f.raio_atendimento_km as "raioAtendimentoKm",
              f.registro_profissional as "registroProfissional", f.created_at as "createdAt", f.updated_at as "updatedAt",
              u.name, u.email, u.cpf,
-             coalesce((select valor from contatos where id_usuario=f.id_usuario and principal=true
-               and tipo in ('telefone','whatsapp') order by id limit 1), '') as telefone,
+             coalesce((select valor from contatos where id_usuario=f.id_usuario
+               and tipo in ('telefone','whatsapp') order by principal desc,id limit 1), '') as telefone,
              array[f.cidade_atuacao] as "cidadesAtuacao",
              array(select codigo_especialidade from fornecedor_especialidades where id_usuario=f.id_usuario order by codigo_especialidade) as especialidades
         from fornecedores f join users u on u.id=f.id_usuario where f.id_usuario=$1`, [id]);
@@ -38,6 +38,7 @@ export class FornecedorRepository implements IFornecedorRepository {
   async addComplete(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void> {
     this.validate(user, fornecedor, contato, especialidades);
     await this.translateConflict(() => this.database.transaction(async sql => {
+      await this.lockProviderCpf(sql, user);
       await this.lockEspecialidades(sql, especialidades);
       await new UserRepository(sql).add(user);
       const d = fornecedor.dados;
@@ -55,7 +56,7 @@ export class FornecedorRepository implements IFornecedorRepository {
     await this.translateConflict(() => this.database.transaction(async sql => {
       const [atual] = await sql.query<{ role: string; is_active: boolean }>('select role,is_active from users where id=$1 for update', [user.id]);
       if (!atual || !atual.is_active) throw new UnauthorizedException();
-      if (atual.role !== UserRole.Prestador) throw new ForbiddenException();
+      if (atual.role !== UserRole.Prestador && atual.role !== UserRole.Cliente) throw new ForbiddenException();
       await this.lockEspecialidades(sql, especialidades);
       // Update only editable fields, preserving documents, email and role.
       await sql.query('update users set name=$2, updated_at=now() where id=$1', [user.id, user.name]);
@@ -73,10 +74,11 @@ export class FornecedorRepository implements IFornecedorRepository {
   async completeExisting(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]): Promise<void> {
     this.validate(user, fornecedor, contato, especialidades);
     await this.translateConflict(() => this.database.transaction(async sql => {
+      await this.lockProviderCpf(sql, user);
       const [atual] = await sql.query<{ role: string; is_active: boolean; cpf: string | null }>(
         'select role,is_active,cpf from public.users where id=$1 for update', [user.id]);
       if (!atual || !atual.is_active) throw new UnauthorizedException();
-      if (atual.role !== UserRole.Prestador) throw new ForbiddenException();
+      if (atual.role !== UserRole.Prestador && atual.role !== UserRole.Cliente) throw new ForbiddenException();
       if (atual.cpf && atual.cpf !== user.cpf) throw new ConflictException('O CPF já cadastrado não pode ser alterado.');
       if ((await sql.query('select id_usuario from public.fornecedores where id_usuario=$1', [user.id])).length) {
         throw new ConflictException('Perfil profissional já cadastrado.');
@@ -102,15 +104,25 @@ export class FornecedorRepository implements IFornecedorRepository {
   }
 
   private validate(user: User, fornecedor: Fornecedor, contato: Contato, codigos: string[]): void {
-    if (user.role !== UserRole.Prestador || !user.isActive || user.id !== fornecedor.idUsuario || user.id !== contato.idUsuario) {
+    if ((user.role !== UserRole.Prestador && user.role !== UserRole.Cliente) || !user.isActive || user.id !== fornecedor.idUsuario || user.id !== contato.idUsuario) {
       throw new DomainException('Usuário, fornecedor e contato devem pertencer ao mesmo Prestador ativo.');
     }
-    fornecedor.normalizeCpf(user.cpf);
+    fornecedor.normalizeCpf(fornecedor.tipoPessoa === 'PF' ? user.cpf : null);
     if (!contato.principal || !['telefone', 'whatsapp'].includes(contato.tipo) || normalizarTelefone(contato.valor) !== contato.valor) {
       throw new DomainException('Informe um telefone principal válido.');
     }
     if (!codigos.length || codigos.length > 100 || new Set(codigos).size !== codigos.length || codigos.some(c => !c.trim() || c.length > 100)) {
       throw new DomainException('Informe ao menos uma especialidade, sem repetições.');
+    }
+  }
+
+  private async lockProviderCpf(sql: Sql, user: User): Promise<void> {
+    if (!user.cpf) return;
+    // Serialize registrations sharing a CPF across the two original account roles.
+    // Transaction-scoped locks also work through the Supabase transaction pooler.
+    await sql.query("select pg_advisory_xact_lock(hashtextextended('fornecedor-cpf:' || $1::text, 0))", [user.cpf]);
+    if (await new UserRepository(sql).existsByCpf(user.cpf, user.id, UserRole.Prestador)) {
+      throw new ConflictException('Já existe prestador com este CPF.');
     }
   }
 

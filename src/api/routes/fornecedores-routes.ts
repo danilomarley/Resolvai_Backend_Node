@@ -28,7 +28,7 @@ export function fornecedoresRoutes(service: FornecedorService) {
     app.addHook('preHandler', async (_request, reply) => { reply.header('Cache-Control', 'no-store'); });
     const rotas = app.withTypeProvider<ZodTypeProvider>();
     rotas.post('/api/v1/fornecedores/me/complete-registration', {
-      schema: { tags: ['Fornecedores'], summary: 'Completa o perfil PF/PJ da própria conta de Prestador existente.', body: completeFornecedorRequestSchema, response: { 201: fornecedorResponseSchema } },
+      schema: { tags: ['Fornecedores'], summary: 'Ativa o perfil profissional PF/PJ da própria conta de Cliente ou Prestador.', body: completeFornecedorRequestSchema, response: { 201: fornecedorResponseSchema } },
       handler: async (request, reply) => reply.code(201).header('Location', '/api/v1/fornecedores/me').send(await service.completeCurrent(request.usuario, request.body))
     });
     rotas.get('/api/v1/fornecedores/me/oportunidades', {

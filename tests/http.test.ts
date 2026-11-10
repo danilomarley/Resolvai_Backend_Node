@@ -108,12 +108,12 @@ describe('API HTTP', () => {
     app.inject({ method: 'GET', url, headers: sub ? { authorization: `Bearer ${await token(sub)}` } : {} });
 
   describe('autenticação', () => {
-    it('conclui perfil profissional somente para a própria conta autenticada de Prestador', async () => {
+    it('conclui perfil profissional para a própria conta autenticada e preserva o CPF existente', async () => {
       const url = '/api/v1/fornecedores/me/complete-registration';
       const payload = { name: 'Fornecedor Legado', tipoPessoa: 'PF', cpf: '52998224725', nomeExibicao: 'Fornecedor Legado',
         telefone: '85999999999', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', especialidades: ['eletrica'] };
       expect((await app.inject({ method: 'POST', url, payload })).statusCode).toBe(401);
-      expect((await app.inject({ method: 'POST', url, payload, headers: { authorization: `Bearer ${await token(clienteId)}` } })).statusCode).toBe(403);
+      expect((await app.inject({ method: 'POST', url, payload, headers: { authorization: `Bearer ${await token(clienteId)}` } })).statusCode).toBe(409);
       const prestadorId = randomUUID();
       await users.add(User.register(prestadorId, 'Legado', Email.create('legado-http@teste.com'), UserRole.Prestador));
       const headers = { authorization: `Bearer ${await token(prestadorId)}` };

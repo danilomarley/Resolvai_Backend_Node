@@ -106,7 +106,7 @@ export class PrestadorRepository implements IPrestadorRepository {
       // The same lock is taken by the full profile editor; proposal creation takes it FOR SHARE.
       const [profile] = await sql.query(`select f.id_usuario from public.users u
         join public.fornecedores f on f.id_usuario=u.id
-        where u.id=$1 and u.role='Prestador' and u.is_active for update of u`, [prestadorId]);
+        where u.id=$1 and u.role in ('Cliente','Prestador') and u.is_active for update of u`, [prestadorId]);
       if (!profile) return 'incomplete';
       const validas = await sql.query<{ codigo: string }>(
         `select e.codigo from public.especialidades e
@@ -130,7 +130,7 @@ export class PrestadorRepository implements IPrestadorRepository {
         `select count(*) filter (where p.data_criacao >= now() - interval '24 hours') as "newOrdersLast24h",
                 count(*) filter (where ${compativelExpr('$1')}) as "compatibleOpenOrders"
            from public.pedidos p
-          where ${abertoSemEscolhida};`,
+          where ${abertoSemEscolhida} and p.id_cliente <> $1;`,
         [prestadorId]
       );
       return { ...(pedidos ?? { newOrdersLast24h: 0, compatibleOpenOrders: 0 }), proposals: await contarPropostas(sql, prestadorId) };
@@ -145,7 +145,7 @@ export class PrestadorRepository implements IPrestadorRepository {
     };
 
     // $1 (o prestador) precisa aparecer em todas as consultas que recebem params, mesmo sem filtro de compatibilidade.
-    const where = ['$1::uuid is not null', abertoSemEscolhida];
+    const where = ['p.id_cliente <> $1', abertoSemEscolhida];
     if (filtro.category) {
       const category = param(filtro.category);
       where.push(
@@ -202,7 +202,7 @@ export class PrestadorRepository implements IPrestadorRepository {
                 ${statusPedidoExpr} as "status",
                 ${abertoSemEscolhida} as "open"
            ${fromPedido}
-          where p.id = $2
+          where p.id = $2 and p.id_cliente <> $1
             and (p.status = 'aberto'
                  or exists (select 1 from public.propostas x where x.id_pedido = p.id and x.id_prestador = $1));`,
         [prestadorId, orderId]

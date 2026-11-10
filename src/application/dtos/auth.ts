@@ -32,6 +32,12 @@ export const loginResponseSchema = z.object({
 
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
 
+/** Provider portal context; the account's original role remains unchanged. */
+export const providerLoginResponseSchema = loginResponseSchema.extend({
+  providerProfileStatus: z.enum(['pending', 'active'])
+});
+export type ProviderLoginResponse = z.infer<typeof providerLoginResponseSchema>;
+
 /**
  * Resposta pública uniforme, sem revelar a existência da conta.
  */

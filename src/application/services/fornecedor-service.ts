@@ -30,7 +30,7 @@ export class FornecedorService {
     const cpf = perfil.normalizeCpf(request.cpf);
     const telefone = normalizarTelefone(request.telefone);
     const codigos = await this.validarEspecialidades(request.especialidades);
-    if (await this.users.existsByEmail(email)) throw new ConflictException('E-mail já cadastrado. Use uma conta distinta para cada papel.');
+    if (await this.users.existsByEmail(email)) throw new ConflictException('E-mail já cadastrado. Entre com sua conta existente para ativar o perfil de fornecedor.');
     if (cpf && await this.users.existsByCpf(cpf, perfil.idUsuario, UserRole.Prestador)) throw new ConflictException('Já existe prestador com este CPF.');
     if (perfil.cnpj && await this.fornecedores.existsByCnpj(perfil.cnpj)) throw new ConflictException('CNPJ já cadastrado.');
 
@@ -69,19 +69,17 @@ export class FornecedorService {
   }
 
   async completeCurrent(current: CurrentUser, request: CompleteFornecedorRequest): Promise<FornecedorResponse> {
-    const user = await this.exigirPrestador(current);
+    const user = await this.exigirContaAtiva(current);
     if (await this.fornecedores.getByUsuarioId(user.id)) throw new ConflictException('Perfil profissional já cadastrado.');
     const fornecedor = Fornecedor.register(user.id, request.tipoPessoa, request.cnpj, request);
-    if (user.cpf?.trim() && fornecedor.tipoPessoa === 'PJ') {
-      throw new ConflictException('O CPF já cadastrado não pode ser substituído por um cadastro de pessoa jurídica.');
-    }
-    const cpf = fornecedor.normalizeCpf(request.cpf ?? user.cpf);
-    if (user.cpf?.trim() && cpf !== user.cpf) throw new ConflictException('O CPF já cadastrado não pode ser alterado.');
+    // A business profile keeps the account holder's existing CPF and stores its CNPJ separately.
+    const cpf = fornecedor.normalizeCpf(fornecedor.tipoPessoa === 'PF' ? request.cpf ?? user.cpf : request.cpf);
+    if (fornecedor.tipoPessoa === 'PF' && user.cpf?.trim() && cpf !== user.cpf) throw new ConflictException('O CPF já cadastrado não pode ser alterado.');
     const telefone = normalizarTelefone(request.telefone);
     const codigos = await this.validarEspecialidades(request.especialidades);
     if (cpf && await this.users.existsByCpf(cpf, user.id, UserRole.Prestador)) throw new ConflictException('Já existe prestador com este CPF.');
     if (fornecedor.cnpj && await this.fornecedores.existsByCnpj(fornecedor.cnpj)) throw new ConflictException('CNPJ já cadastrado.');
-    user.changeName(request.name);
+    if (user.role === UserRole.Prestador) user.changeName(request.name);
     if (cpf && !user.cpf) user.completeRegistration(cpf);
     await this.fornecedores.completeExisting(user, fornecedor, Contato.register(user.id, 'whatsapp', telefone, true), codigos);
     return this.getCurrent(current);
@@ -115,11 +113,17 @@ export class FornecedorService {
     return opportunity;
   }
 
-  private async exigirPrestador(current: CurrentUser): Promise<User> {
+  private async exigirContaAtiva(current: CurrentUser): Promise<User> {
     if (!current.isAuthenticated || !current.id) throw new UnauthorizedException();
     const user = await this.users.getById(current.id);
     if (!user || !user.isActive) throw new UnauthorizedException('Perfil de Prestador indisponível.');
-    if (user.role !== UserRole.Prestador) throw new ForbiddenException();
+    if (user.role !== UserRole.Prestador && user.role !== UserRole.Cliente) throw new ForbiddenException();
+    return user;
+  }
+
+  private async exigirPrestador(current: CurrentUser): Promise<User> {
+    const user = await this.exigirContaAtiva(current);
+    if (user.role === UserRole.Cliente && !await this.fornecedores.getByUsuarioId(user.id)) throw new ForbiddenException();
     return user;
   }
 

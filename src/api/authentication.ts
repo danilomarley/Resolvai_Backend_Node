@@ -58,7 +58,8 @@ export function criarVerificadorDeToken(options: AuthenticationOptions): Verific
 /**
  * Hook de autenticação das rotas protegidas (equivalente ao [Authorize] + JwtBearer da API C#).
  *
- * O JWT do Supabase traz role=authenticated. Substituímos pela role do perfil local (Cliente/Prestador/Admin).
+ * O JWT do Supabase traz role=authenticated. O papel original vem do perfil local;
+ * a capacidade profissional adicional de Cliente vem da linha em fornecedores.
  * Usuário sem perfil local ainda (cadastro não finalizado) segue autenticado só com as claims do Supabase,
  * para poder chamar a rota de finalização de cadastro.
  */
@@ -98,7 +99,8 @@ export function criarHookDeAutenticacao(verificarToken: VerificarToken, userRepo
       isAuthenticated: true,
       id,
       email: emailDoToken ?? user?.email.value,
-      role: user?.role
+      role: user?.role,
+      hasProviderProfile: user?.hasProviderProfile === true
     };
   };
 }
@@ -113,10 +115,12 @@ export async function exigirAdmin(request: FastifyRequest, reply: FastifyReply) 
 }
 
 /**
- * 403 para quem está autenticado sem o papel Prestador (rotas do app do prestador).
+ * Prestador legado ou Cliente com perfil profissional persistido. Claims do JWT
+ * e status de ativação enviados pelo navegador nunca concedem essa permissão.
  */
 export async function exigirPrestador(request: FastifyRequest, reply: FastifyReply) {
-  if (request.usuario.role !== UserRole.Prestador) {
+  if (request.usuario.role !== UserRole.Prestador
+    && !(request.usuario.role === UserRole.Cliente && request.usuario.hasProviderProfile)) {
     return enviarProblema(reply, 403);
   }
 }

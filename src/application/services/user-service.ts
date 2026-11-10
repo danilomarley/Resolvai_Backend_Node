@@ -4,6 +4,7 @@ import { Endereco } from '../../domain/endereco.js';
 import { DomainException } from '../../domain/errors.js';
 import { UserRole } from '../../domain/enums.js';
 import { User } from '../../domain/user.js';
+import { normalizarTelefone } from '../../domain/telefone.js';
 import type {
   CurrentUser,
   IContatoRepository,
@@ -103,10 +104,14 @@ export class UserService {
 
     if (user.role !== UserRole.Cliente) throw new ForbiddenException('A finalização genérica de cadastro é exclusiva de Cliente.');
     if (user.cpf?.trim()) {
-      throw new ConflictException('Cadastro já finalizado.');
+      const canCompleteCustomer = user.hasProviderProfile && user.cpf === onlyDigits(request.cpf)
+        && !await this.enderecoRepository.getPrincipal(id);
+      if (!canCompleteCustomer) throw new ConflictException('Cadastro já finalizado.');
     }
 
     const cpf = onlyDigits(request.cpf);
+    const valorContato = user.hasProviderProfile && ['telefone', 'whatsapp'].includes(request.contato.tipo)
+      ? normalizarTelefone(request.contato.valor) : request.contato.valor;
 
     if (await this.userRepository.existsByCpf(cpf, id, user.role)) {
       throw new ConflictException(`Já existe um usuário com o CPF '${request.cpf}'.`);
@@ -130,8 +135,9 @@ export class UserService {
     });
     await this.enderecoRepository.add(endereco);
 
-    const contato = Contato.register(user.id, request.contato.tipo, request.contato.valor, true);
-    await this.contatoRepository.add(contato);
+    const contato = Contato.register(user.id, request.contato.tipo, valorContato, true);
+    if (user.hasProviderProfile) await this.contatoRepository.salvarPrincipal(contato);
+    else await this.contatoRepository.add(contato);
 
     return toUserResponse(user);
   }
@@ -169,7 +175,9 @@ export class UserService {
           principal: true
         })
       : null;
-    const contato = request.contato ? Contato.register(user.id, request.contato.tipo, request.contato.valor, true) : null;
+    const contato = request.contato ? Contato.register(user.id, request.contato.tipo,
+      user.hasProviderProfile && ['telefone', 'whatsapp'].includes(request.contato.tipo)
+        ? normalizarTelefone(request.contato.valor) : request.contato.valor, true) : null;
 
     if (request.name !== undefined) {
       user.changeName(request.name);
