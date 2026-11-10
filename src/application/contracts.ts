@@ -18,6 +18,8 @@ export interface CurrentUser {
   id?: string;
   email?: string;
   role?: UserRole;
+  /** Derived from the persisted professional profile, never from JWT metadata. */
+  hasProviderProfile?: boolean;
 }
 
 export const usuarioAnonimo: CurrentUser = { isAuthenticated: false };

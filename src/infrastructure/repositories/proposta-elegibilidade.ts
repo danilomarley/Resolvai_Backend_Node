@@ -19,7 +19,7 @@ export async function avaliarPedidoParaProposta(sql: Sql, orderId: string, provi
     from public.users u
     left join public.fornecedores f on f.id_usuario=u.id
     left join public.pedidos p on p.id=$1
-    where u.id=$2 and u.role='Prestador' and u.is_active=true`, [orderId, providerId]);
+    where u.id=$2 and u.role in ('Cliente','Prestador') and u.is_active=true`, [orderId, providerId]);
   if (!result) return 'unavailable';
   if (!result.registrationComplete) return 'incomplete';
   return result.available ? 'available' : 'unavailable';

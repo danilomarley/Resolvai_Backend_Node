@@ -23,7 +23,7 @@ export function propostasFornecedorRoutes(service: PropostaFornecedorService) {
     app.withTypeProvider<ZodTypeProvider>().post('/api/v1/fornecedores/me/oportunidades/:id/propostas', {
       schema: { tags: ['Propostas'], summary: 'Envia uma proposta e até cinco fotos do portfólio.', consumes: ['multipart/form-data'], params: z.object({ id: z.string() }), response: { 201: propostaEnviadaSchema } },
       handler: async (request, reply) => {
-        if (request.usuario.role !== 'Prestador') throw new ForbiddenException();
+        if (request.usuario.role !== 'Prestador' && !(request.usuario.role === 'Cliente' && request.usuario.hasProviderProfile)) throw new ForbiddenException();
         limit.registrar(request.usuario.id!);
         const id = normalizarGuid(request.params.id);
         if (!id) throw new NotFoundException('Pedido', request.params.id);

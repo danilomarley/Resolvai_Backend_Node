@@ -20,7 +20,7 @@ A migração pendente `supabase/migrations/20261109014627_reconcile_fornecedor_p
 
 ## Rotas do prestador
 
-Todas exigem o papel `Prestador` (403 para os demais), `Cache-Control: no-store`, e usam `ProblemDetails` nos erros.
+Todas exigem `Prestador` ou uma conta `Cliente` com perfil profissional persistido em `fornecedores` (403 antes da ativação e para os demais papéis), `Cache-Control: no-store`, e usam `ProblemDetails` nos erros.
 
 | Método e rota | Descrição |
 | --- | --- |

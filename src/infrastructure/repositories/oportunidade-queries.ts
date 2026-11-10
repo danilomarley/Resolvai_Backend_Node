@@ -11,7 +11,7 @@ const matchingOrders = `with specialties as (
     from public.fornecedor_especialidades fe
     join public.especialidades e on e.codigo = fe.codigo_especialidade and e.is_active = true
     join public.fornecedores f on f.id_usuario = fe.id_usuario
-    join public.users u on u.id = f.id_usuario and u.role = 'Prestador' and u.is_active = true
+    join public.users u on u.id = f.id_usuario and u.role in ('Cliente','Prestador') and u.is_active = true
    where fe.id_usuario = $1
 ), matching_orders as (
   select p.id, coalesce(nullif(btrim(p.escopo->>'titulo'), ''), specialty.nome) as title,

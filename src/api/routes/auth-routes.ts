@@ -5,6 +5,7 @@ import {
   alterarSenhaRequestSchema,
   loginRequestSchema,
   loginResponseSchema,
+  providerLoginResponseSchema,
   refreshRequestSchema,
   recuperarSenhaRequestSchema,
   redefinirSenhaRequestSchema,
@@ -36,8 +37,13 @@ export function authRoutes(authService: AuthService, verificarToken: VerificarTo
     const rotas = app.withTypeProvider<ZodTypeProvider>();
 
     rotas.post('/api/v1/auth/login-provider', {
-      schema: { tags: ['Auth'], summary: 'Autentica um Prestador ativo com perfil profissional.', body: loginRequestSchema, response: { 200: loginResponseSchema } },
+      schema: { tags: ['Auth'], summary: 'Autentica a conta e informa se falta ativar o perfil profissional.', body: loginRequestSchema, response: { 200: providerLoginResponseSchema } },
       handler: request => authService.loginProvider(request.body)
+    });
+
+    rotas.post('/api/v1/auth/refresh-provider', {
+      schema: { tags: ['Auth'], summary: 'Renova a sessão do portal do Fornecedor e revalida sua ativação.', body: refreshRequestSchema, response: { 200: providerLoginResponseSchema } },
+      handler: request => authService.refreshProvider(request.body.refreshToken)
     });
 
     rotas.post('/api/v1/auth/refresh', {

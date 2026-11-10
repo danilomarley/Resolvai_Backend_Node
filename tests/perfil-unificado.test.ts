@@ -262,7 +262,7 @@ describe('Perfil canônico nas tabelas existentes de fornecedor', () => {
       const inativo = randomUUID();
       await pg.query(`insert into users(id,name,email,role,cpf,is_active) values
         ($1,'Legado','legado@teste.com','Prestador','52998224725',true),
-        ($2,'Cliente','cliente@teste.com','Cliente',null,true),
+        ($2,'Admin','cliente@teste.com','Admin',null,true),
         ($3,'Inativo','inativo@teste.com','Prestador',null,false)`, [id, cliente, inativo]);
       const data = { name: 'Profissional', nomeExibicao: 'Profissional', tipoPessoa: 'PF' as const,
         telefone: '85999999999', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE', raioAtendimentoKm: 20, especialidades: ['eletrica'] };
@@ -271,7 +271,7 @@ describe('Perfil canônico nas tabelas existentes de fornecedor', () => {
       await expect(service.completeCurrent({ isAuthenticated: true, id: cliente }, data)).rejects.toBeInstanceOf(ForbiddenException);
       await expect(service.completeCurrent({ isAuthenticated: true, id: inativo }, data)).rejects.toBeInstanceOf(UnauthorizedException);
       await expect(service.completeCurrent({ isAuthenticated: true, id }, { ...data, cpf: '11144477735' })).rejects.toBeInstanceOf(ConflictException);
-      await expect(service.completeCurrent({ isAuthenticated: true, id }, { ...data, tipoPessoa: 'PJ', cnpj: '11.222.333/0001-81' })).rejects.toBeInstanceOf(ConflictException);
+      await expect(service.completeCurrent({ isAuthenticated: true, id }, { ...data, tipoPessoa: 'PJ', cpf: '52998224725', cnpj: '11.222.333/0001-81' })).rejects.toThrow('Pessoa jurídica não pode informar CPF');
 
       // Revalidate the persisted document under the transaction lock, even if an out-of-date service sent a replacement.
       const changed = User.restore(id, 'Outro', Email.create('novo@teste.com'), UserRole.Prestador, true, new Date(), null, '11144477735');

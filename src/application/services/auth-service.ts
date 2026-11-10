@@ -2,7 +2,7 @@ import { Email } from '../../domain/email.js';
 import { UserRole } from '../../domain/enums.js';
 import { User } from '../../domain/user.js';
 import type { CurrentUser, IFornecedorRepository, ISupabaseAuthClient, IUserRepository, SupabaseSession } from '../contracts.js';
-import type { AlterarSenhaRequest, LoginRequest, LoginResponse, RedefinirSenhaRequest, RegisterRequest, VerificarEmailRequest } from '../dtos/auth.js';
+import type { AlterarSenhaRequest, LoginRequest, LoginResponse, ProviderLoginResponse, RedefinirSenhaRequest, RegisterRequest, VerificarEmailRequest } from '../dtos/auth.js';
 import type { UserResponse } from '../dtos/users.js';
 import { ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '../errors.js';
 import { toUserResponse } from '../mappings/user-mapper.js';
@@ -24,11 +24,18 @@ export class AuthService {
     return this.toResponse(session);
   }
 
-  async loginProvider(request: LoginRequest): Promise<LoginResponse> {
-    const response = await this.login(request);
-    if (response.user.role !== UserRole.Prestador) throw new ForbiddenException();
-    await this.exigirPerfilFornecedor(response.user.id);
-    return response;
+  async loginProvider(request: LoginRequest): Promise<ProviderLoginResponse> {
+    return this.withProviderStatus(await this.login(request));
+  }
+
+  async refreshProvider(refreshToken: string): Promise<ProviderLoginResponse> {
+    return this.withProviderStatus(await this.toResponse(await this.supabaseAuthClient.refreshSession(refreshToken)));
+  }
+
+  private async withProviderStatus(response: LoginResponse): Promise<ProviderLoginResponse> {
+    if (response.user.role !== UserRole.Cliente && response.user.role !== UserRole.Prestador) throw new ForbiddenException();
+    const profile = await this.fornecedores?.getByUsuarioId(response.user.id);
+    return { ...response, providerProfileStatus: profile ? 'active' : 'pending' };
   }
 
   async refresh(refreshToken: string): Promise<LoginResponse> {

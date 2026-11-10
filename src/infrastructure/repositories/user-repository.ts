@@ -12,7 +12,8 @@ const selectColumns = `
          is_active  as "isActive",
          created_at as "createdAt",
          updated_at as "updatedAt",
-         cpf        as "cpf"
+         cpf        as "cpf",
+         exists(select 1 from public.fornecedores f where f.id_usuario = users.id) as "hasProviderProfile"
     from users`;
 
 interface UserRow {
@@ -24,6 +25,7 @@ interface UserRow {
   createdAt: Date;
   updatedAt: Date | null;
   cpf: string | null;
+  hasProviderProfile: boolean;
 }
 
 export class UserRepository implements IUserRepository {
@@ -49,7 +51,7 @@ export class UserRepository implements IUserRepository {
 
   async existsByCpf(cpf: string, excludingUserId: string, role: UserRole): Promise<boolean> {
     const [row] = await this.sql.query<{ exists: boolean }>(
-      'select exists (select 1 from users where cpf = $1 and id <> $2 and role = $3) as "exists";',
+      `select exists (select 1 from users where cpf = $1 and id <> $2 and (role = $3 or ($3 = 'Prestador' and exists(select 1 from public.fornecedores f where f.id_usuario = users.id)))) as "exists";`,
       [cpf, excludingUserId, role]
     );
     return row?.exists ?? false;
@@ -89,5 +91,5 @@ function toDomain(row: UserRow): User {
     throw new Error(`Papel desconhecido em users.role: '${row.role}'.`);
   }
 
-  return User.restore(row.id, row.name, Email.create(row.emailAddress), role, row.isActive, row.createdAt, row.updatedAt, row.cpf);
+  return User.restore(row.id, row.name, Email.create(row.emailAddress), role, row.isActive, row.createdAt, row.updatedAt, row.cpf, row.hasProviderProfile);
 }

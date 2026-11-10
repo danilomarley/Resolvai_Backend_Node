@@ -72,7 +72,8 @@ tests/                 Vitest
 | POST | `/api/v1/auth/login` | público |
 | POST | `/api/v1/auth/register` | público |
 | POST | `/api/v1/auth/register-provider` | público, cadastro PF/PJ |
-| POST | `/api/v1/auth/login-provider` | público, exige Prestador ativo com perfil |
+| POST | `/api/v1/auth/login-provider` | público, Cliente ou Prestador ativo; informa ativação profissional pendente/ativa |
+| POST | `/api/v1/auth/refresh-provider` | refresh token, revalida acesso e ativação do Fornecedor |
 | POST | `/api/v1/auth/refresh` | refresh token, revalida perfil local ativo |
 | POST | `/api/v1/auth/check-email` | público, resposta uniforme sem revelar existência da conta |
 | POST | `/api/v1/auth/reset-password` | público, exige OTP de recuperação válido |
@@ -80,7 +81,7 @@ tests/                 Vitest
 | POST | `/api/v1/auth/change-password` | Bearer, altera somente a senha da própria sessão |
 | GET | `/api/v1/especialidades` | público, catálogo ativo |
 | GET | `/api/v1/fornecedores/me` | Prestador ativo, próprio perfil |
-| POST | `/api/v1/fornecedores/me/complete-registration` | Prestador ativo, conclui perfil profissional da própria conta legada |
+| POST | `/api/v1/fornecedores/me/complete-registration` | Cliente ou Prestador ativo, ativa o perfil profissional da própria conta |
 | GET | `/api/v1/fornecedores/me/oportunidades` | Prestador ativo, pedidos abertos das próprias especialidades |
 | GET | `/api/v1/fornecedores/me/oportunidades/{id}` | Prestador ativo, detalhe de um pedido compatível e disponível |
 | POST | `/api/v1/fornecedores/me/oportunidades/{id}/propostas` | Prestador ativo, formulário multipart e até 5 fotos |
@@ -106,6 +107,8 @@ Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md
 A recuperação por código preserva `check-email` e `reset-password`: o segundo recebe `{email, token, newPassword}` e valida o OTP de uso único no Supabase. O fluxo por link usa `forgot-password` com `{email, redirectTo}` e `change-password` com Bearer e `{newPassword}`. A alteração usa a sessão verificada do usuário. Veja [recuperação segura](docs/PASSWORD-RECOVERY.md).
 
 O cadastro de Cliente permanece simples em `register`. O cadastro de fornecedor em `register-provider` exige PF/PJ, documento correspondente, contato e especialidades. As duas APIs profissionais usam somente `fornecedores`, `especialidades` e `fornecedor_especialidades`, com a cidade principal em `fornecedores.cidade_atuacao`. As listas `cities`/`cidadesAtuacao` contêm somente essa cidade; múltiplas cidades são rejeitadas. Em `/catalog/categories`, `id` é o código textual da especialidade, usado também em `categoryIds` de `/provider/profile`; UUIDs de categoria não são usados. Propostas exigem especialidade e cidade compatíveis.
+
+Uma conta Cliente pode ativar o perfil profissional no mesmo UUID, preservando `users.role=Cliente`, e-mail, senha e permissões de contratação. A linha em `fornecedores` concede a capacidade profissional adicional, validada no banco a cada requisição. Não há nova migração para essa ativação; as tabelas canônicas existentes são reutilizadas.
 
 Contratos e retomada estão em [PROVIDER-REGISTRATION.md](docs/PROVIDER-REGISTRATION.md). Cadastros respeitam a política de confirmação do Auth, preservam a senha de contas pendentes e têm limites por IP.
 

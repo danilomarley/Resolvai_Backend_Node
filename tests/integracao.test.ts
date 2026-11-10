@@ -346,13 +346,13 @@ describe('Integração com PostgreSQL', () => {
       }
     });
 
-    it('login-provider e refresh exigem identidade local ativa e perfil Prestador', async () => {
+    it('login-provider indica ativação pendente e refresh genérico preserva o contrato existente', async () => {
       const session = (id: string) => ({ accessToken: 'access', tokenType: 'bearer', refreshToken: 'rotated', expiresAtUtc: new Date(), user: { id, email: pf.email } });
       supabase.session = session(ids.cliente);
       const login = () => app.inject({ method: 'POST', url: '/api/v1/auth/login-provider', payload: { email: pf.email, password: pf.password } });
-      expect((await login()).statusCode).toBe(403);
+      expect((await login()).json()).toMatchObject({ user: { role: 'Cliente' }, providerProfileStatus: 'pending' });
       supabase.session = session(ids.prestador);
-      expect((await login()).statusCode).toBe(404);
+      expect((await login()).json()).toMatchObject({ user: { role: 'Prestador' }, providerProfileStatus: 'pending' });
       supabase.session = session(profissionalId);
       const logado = await login();
       expect(logado.statusCode).toBe(200);
@@ -1386,6 +1386,171 @@ describe('Integração com PostgreSQL', () => {
       const spec = (await app.inject('/openapi/v1.json')).json();
       expect(spec.paths['/api/v1/orders/{id}/review'].post.security).toEqual([{ Bearer: [] }]);
       expect(spec.paths['/api/v1/orders/{id}/review'].post.responses['201']).toBeDefined();
+    });
+  });
+
+  describe('conta de Cliente com perfil de Fornecedor', () => {
+    const sharedId = randomUUID();
+    const owner = randomUUID();
+    const email = 'conta-compartilhada@example.invalid';
+    const professional = { name: 'Nome que não deve substituir o nome do cliente', tipoPessoa: 'PF',
+      nomeExibicao: 'Serviços Compartilhados', telefone: '85999997777', cidadeAtuacao: 'Fortaleza', ufAtuacao: 'CE',
+      raioAtendimentoKm: 20, especialidades: ['eletrica'] };
+    let ownOrder: string;
+    let otherOrder: string;
+    const setSession = (id: string = sharedId) => {
+      supabase.session = { accessToken: 'shared-access', tokenType: 'bearer', refreshToken: 'shared-refresh',
+        expiresAtUtc: new Date(Date.now() + 300000), user: { id, email } };
+    };
+    const login = (url = '/api/v1/auth/login-provider') => app.inject({ method: 'POST', url, payload: { email, password: 'SenhaTeste123' } });
+    const refresh = () => app.inject({ method: 'POST', url: '/api/v1/auth/refresh-provider', payload: { refreshToken: 'shared-refresh' } });
+    const cpfValido = (base: string) => {
+      let cpf = base;
+      for (let size = 9; size <= 10; size++) {
+        const sum = [...cpf].reduce((total, digit, index) => total + Number(digit) * (size + 1 - index), 0);
+        const rest = sum % 11;
+        cpf += rest < 2 ? '0' : String(11 - rest);
+      }
+      return cpf;
+    };
+    beforeAll(async () => {
+      await database.query(`insert into users(id,name,email,role,cpf) values
+        ($1,'Cliente Original',$2,'Cliente',$3),($4,'Outro Contratante','outro-compartilhado@example.invalid','Cliente',$5)`,
+      [sharedId, email, cpfValido('456781234'), owner, cpfValido('456781235')]);
+    });
+
+    it('autentica Cliente para ativação sem conceder acesso profissional antes de concluir', async () => {
+      setSession();
+      const response = await login();
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({ providerProfileStatus: 'pending', user: { id: sharedId, role: 'Cliente', name: 'Cliente Original' } });
+      expect((await refresh()).json()).toMatchObject({ providerProfileStatus: 'pending', user: { role: 'Cliente' } });
+      for (const url of ['/api/v1/fornecedores/me', '/api/v1/provider/summary', '/api/v1/provider/profile', '/api/v1/provider/proposals']) {
+        expect((await chamar('GET', url, sharedId)).statusCode).toBe(403);
+      }
+      expect((await login('/api/v1/auth/login')).json()).toMatchObject({ user: { role: 'Cliente' } });
+      expect((await login('/api/v1/auth/login')).json()).not.toHaveProperty('providerProfileStatus');
+      const fakeRole = await new SignJWT({ email, role: 'Prestador', user_metadata: { role: 'Prestador', hasProviderProfile: true } })
+        .setProtectedHeader({ alg: 'HS256' }).setIssuer(issuer).setAudience('authenticated').setSubject(sharedId)
+        .setIssuedAt().setExpirationTime('5m').sign(new TextEncoder().encode(segredo));
+      expect((await app.inject({ method: 'GET', url: '/api/v1/provider/summary', headers: { authorization: `Bearer ${fakeRole}` } })).statusCode).toBe(403);
+    });
+
+    it('ativa uma única vez, vincula ao UUID autenticado e preserva identidade, papel e CPF', async () => {
+      const [before] = await database.query<{ total: number }>('select count(*) as total from users');
+      const url = '/api/v1/fornecedores/me/complete-registration';
+      for (const extra of [{ idUsuario: owner }, { role: 'Prestador' }, { email: 'outro@example.invalid' }, { password: 'NovaSenha123' }]) {
+        expect((await chamar('POST', url, sharedId, { ...professional, ...extra })).statusCode).toBe(400);
+      }
+      const responses = await Promise.all([chamar('POST', url, sharedId, professional), chamar('POST', url, sharedId, professional)]);
+      expect(responses.map(r => r.statusCode).sort()).toEqual([201,409]);
+      expect(responses.find(r => r.statusCode === 201)!.json()).toMatchObject({ idUsuario: sharedId, email, name: 'Cliente Original' });
+      expect(await database.query('select id_usuario from fornecedores where id_usuario=$1', [sharedId])).toHaveLength(1);
+      expect(await database.query('select id from users where id=$1 and role=$2 and cpf=$3', [sharedId, 'Cliente', cpfValido('456781234')])).toHaveLength(1);
+      expect((await database.query('select count(*) as total from users'))[0]).toEqual(before);
+      expect(await database.query('select id_usuario from fornecedores where id_usuario=$1', [owner])).toHaveLength(0);
+      setSession();
+      expect((await login()).json()).toMatchObject({ providerProfileStatus: 'active', user: { role: 'Cliente', id: sharedId } });
+      expect((await refresh()).json()).toMatchObject({ providerProfileStatus: 'active', user: { role: 'Cliente' } });
+      expect((await login('/api/v1/auth/login')).json()).toMatchObject({ user: { role: 'Cliente' } });
+    });
+
+    it('mantém operações de cliente e permite oportunidades, perfil e propostas após ativação', async () => {
+      const order = { titulo: 'Pedido da conta compartilhada', categoria: 'Elétrica', descricao: 'Instalar uma tomada no quarto.', localizacao: 'Aldeota, Fortaleza — CE' };
+      const own = await chamar('POST', '/api/v1/orders', sharedId, order);
+      const other = await chamar('POST', '/api/v1/orders', owner, { ...order, titulo: 'Pedido de outro cliente compartilhado' });
+      expect(own.statusCode).toBe(201);
+      expect(other.statusCode).toBe(201);
+      ownOrder = own.json().id;
+      otherOrder = other.json().id;
+      expect((await chamar('GET', `/api/v1/orders/${ownOrder}`, sharedId)).statusCode).toBe(200);
+      expect((await chamar('GET', `/api/v1/orders/${otherOrder}`, sharedId)).statusCode).toBe(404);
+      expect((await chamar('GET', '/api/v1/provider/profile', sharedId)).json()).toMatchObject({ registrationComplete: true, onboardingComplete: true });
+      expect((await chamar('PUT', '/api/v1/provider/profile', sharedId, { categoryIds: ['eletrica'], cities: ['Fortaleza'] })).statusCode).toBe(200);
+      expect((await chamar('GET', `/api/v1/fornecedores/me/oportunidades/${otherOrder}`, sharedId)).statusCode).toBe(200);
+      expect((await chamar('GET', `/api/v1/fornecedores/me/oportunidades/${ownOrder}`, sharedId)).statusCode).toBe(404);
+      expect((await chamar('GET', `/api/v1/provider/orders/${ownOrder}`, sharedId)).statusCode).toBe(404);
+      const proposal = { value: 180, deadlineDays: 1, description: 'Instalação completa com testes de funcionamento.', warranty: '90 dias de garantia' };
+      expect((await chamar('POST', `/api/v1/provider/orders/${ownOrder}/proposals`, sharedId, proposal)).statusCode).toBe(404);
+      const sent = await chamar('POST', `/api/v1/provider/orders/${otherOrder}/proposals`, sharedId, proposal);
+      expect(sent.statusCode, sent.body).toBe(201);
+      expect((await chamar('GET', sent.headers.location as string, sharedId)).statusCode).toBe(200);
+      expect((await chamar('GET', sent.headers.location as string, owner)).statusCode).toBe(403);
+      const profile = (await chamar('GET', '/api/v1/fornecedores/me', sharedId)).json();
+      expect((await chamar('PATCH', '/api/v1/fornecedores/me', sharedId, {
+        name: profile.name, nomeExibicao: 'Nome profissional atualizado', telefone: profile.telefone,
+        cidadeAtuacao: profile.cidadeAtuacao, ufAtuacao: profile.ufAtuacao, raioAtendimentoKm: 20, especialidades: ['eletrica']
+      })).statusCode).toBe(200);
+    });
+
+    it('preserva telefone profissional ao mudar contato de Cliente e mantém um único principal', async () => {
+      const url = '/api/v1/users/me/profile';
+      expect((await chamar('PATCH', url, sharedId, { contato: { tipo: 'email_alt', valor: 'contato-compartilhado@example.invalid' } })).statusCode).toBe(200);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', sharedId)).json().telefone).toBe('85999997777');
+      expect((await chamar('GET', url, sharedId)).json().contato).toMatchObject({ tipo: 'email_alt', valor: 'contato-compartilhado@example.invalid' });
+      expect(await database.query('select id from contatos where id_usuario=$1 and principal', [sharedId])).toHaveLength(1);
+      expect((await chamar('PATCH', url, sharedId, { contato: { tipo: 'telefone', valor: 'telefone inválido' } })).statusCode).toBe(400);
+      expect((await chamar('PATCH', url, sharedId, { contato: { tipo: 'telefone', valor: '(85) 98888-7777' } })).statusCode).toBe(200);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', sharedId)).json().telefone).toBe('85988887777');
+      expect(await database.query('select id from contatos where id_usuario=$1 and principal', [sharedId])).toHaveLength(1);
+    });
+
+    it('aceita envio multipart da conta compartilhada e impede proposta no próprio pedido', async () => {
+      const fresh = await chamar('POST', '/api/v1/orders', owner, { titulo: 'Outro serviço elétrico', categoria: 'Elétrica', descricao: 'Trocar um interruptor.', localizacao: 'Fortaleza, CE' });
+      const send = async (id: string) => {
+        const boundary = `shared-${randomUUID()}`;
+        const data = { requestId: randomUUID(), valueCents: 18000, deadline: '1 dia', startDate: '2099-01-01',
+          description: 'Instalação e testes completos do equipamento.', guaranteePeriod: '90 dias', guaranteeType: 'Reexecução gratuita', guaranteeConditions: 'Defeitos do serviço.' };
+        return app.inject({ method: 'POST', url: `/api/v1/fornecedores/me/oportunidades/${id}/propostas`,
+          headers: { authorization: `Bearer ${await token(sharedId)}`, 'content-type': `multipart/form-data; boundary=${boundary}` },
+          payload: `--${boundary}\r\nContent-Disposition: form-data; name="proposal"\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--\r\n` });
+      };
+      expect((await send(fresh.json().id)).statusCode).toBe(201);
+      expect((await send(ownOrder)).statusCode).toBe(404);
+      expect(await database.query('select id from propostas where id_pedido=$1 and id_prestador=$2', [ownOrder, sharedId])).toHaveLength(0);
+    });
+
+    it('permite concluir endereço no Cliente após a ativação preencher o CPF', async () => {
+      const id = randomUUID();
+      await database.query("insert into users(id,name,email,role) values($1,'Cliente sem documento','sem-documento-compartilhado@example.invalid','Cliente')", [id]);
+      const cpf = cpfValido('456781236');
+      expect((await chamar('POST', '/api/v1/fornecedores/me/complete-registration', id, { ...professional, cpf })).statusCode).toBe(201);
+      const payload = { name: 'Cliente sem documento', cpf,
+        endereco: { logradouro: 'Rua Teste', numero: '10', bairro: 'Centro', cidade: 'Fortaleza', estado: 'CE', cep: '60000000' },
+        contato: { tipo: 'whatsapp', valor: '85999997777' } };
+      const completed = await chamar('POST', '/api/v1/users/me/complete-registration', id, payload);
+      expect(completed.statusCode, completed.body).toBe(200);
+      expect(completed.json()).toMatchObject({ id, role: 'Cliente', cpf });
+      expect((await chamar('POST', '/api/v1/users/me/complete-registration', id, payload)).statusCode).toBe(409);
+    });
+
+    it('permite PJ mantendo o CPF pessoal da conta e recusa CPF profissional já ativado', async () => {
+      const id = randomUUID();
+      const cpf = cpfValido('456781237');
+      await database.query("insert into users(id,name,email,role,cpf) values($1,'Titular da empresa','empresa-compartilhada@example.invalid','Cliente',$2)", [id, cpf]);
+      expect((await chamar('POST', '/api/v1/fornecedores/me/complete-registration', id, { ...professional, tipoPessoa: 'PJ', cnpj: '04.252.011/0001-10' })).statusCode).toBe(201);
+      expect((await chamar('GET', '/api/v1/fornecedores/me', id)).json()).toMatchObject({ cpf, tipoPessoa: 'PJ', cnpj: '04252011000110' });
+      const another = randomUUID();
+      setSession();
+      supabase.novoUsuario = { id: another, email: 'duplicidade-profissional@example.invalid' };
+      expect((await app.inject({ method: 'POST', url: '/api/v1/auth/register-provider', remoteAddress: '203.0.113.231',
+        payload: { ...professional, email: 'duplicidade-profissional@example.invalid', password: 'SenhaTeste123', cpf: cpfValido('456781234') } })).statusCode).toBe(409);
+      expect(await database.query('select id from users where id=$1', [another])).toHaveLength(0);
+      supabase.novoUsuario = undefined;
+    });
+
+    it('não ativa administradores e revoga sessões inativas ou sem perfil profissional', async () => {
+      expect((await chamar('POST', '/api/v1/fornecedores/me/complete-registration', ids.admin, professional)).statusCode).toBe(403);
+      setSession(ids.admin);
+      expect((await login()).statusCode).toBe(403);
+      await database.query('delete from fornecedor_especialidades where id_usuario=$1', [sharedId]);
+      await database.query('delete from fornecedores where id_usuario=$1', [sharedId]);
+      expect((await chamar('GET', '/api/v1/provider/summary', sharedId)).statusCode).toBe(403);
+      setSession();
+      expect((await refresh()).json()).toMatchObject({ providerProfileStatus: 'pending' });
+      await database.query('update users set is_active=false where id=$1', [sharedId]);
+      expect((await refresh()).statusCode).toBe(401);
+      expect((await login()).statusCode).toBe(401);
     });
   });
 });

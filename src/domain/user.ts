@@ -13,7 +13,8 @@ export class User {
     private _isActive: boolean,
     readonly createdAt: Date,
     private _updatedAt: Date | null,
-    private _cpf: string | null
+    private _cpf: string | null,
+    readonly hasProviderProfile: boolean = false
   ) {}
 
   get name(): string {
@@ -63,9 +64,10 @@ export class User {
     isActive: boolean,
     createdAt: Date,
     updatedAt: Date | null,
-    cpf: string | null = null
+    cpf: string | null = null,
+    hasProviderProfile = false
   ): User {
-    return new User(id, name, email, role, isActive, createdAt, updatedAt, cpf);
+    return new User(id, name, email, role, isActive, createdAt, updatedAt, cpf, hasProviderProfile);
   }
 
   changeName(name: string): void {
