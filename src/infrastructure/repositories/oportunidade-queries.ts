@@ -48,45 +48,60 @@ function summary(row: OpportunityRow): OportunidadeResumo {
 export class OportunidadeQueries implements IOportunidadeQueries {
   constructor(private readonly database: Database) {}
 
-  list(providerId: string, query: ListarOportunidadesQuery): Promise<OportunidadesResponse> {
-    // strpos implements literal search, including '%' and '_', without wildcard injection.
+  async list(providerId: string, query: ListarOportunidadesQuery): Promise<OportunidadesResponse> {
+    // One statement gives items, total and specialties the same PostgreSQL snapshot,
+    // without three SELECTs plus BEGIN/COMMIT over the remote database connection.
+    // strpos remains a literal search, including '%' and '_'.
     const filter = `where ($2 = '' or o."specialtyCode" = $2)
       and ($3 = '' or strpos(${normalize("concat_ws(' ', o.title, o.category, o.location)")}, ${normalize('$3::text')}) > 0)`;
-    const params = [providerId, query.category, query.search];
     const order = query.sort === 'proposals' ? 'o."proposalsCount" asc, o."createdAt" desc, o.id desc' : 'o."createdAt" desc, o.id desc';
-    return this.database.transaction(async sql => {
-      const [count] = await sql.query<{ total: number }>(`${matchingOrders} select count(*) as total from matching_orders o ${filter}`, params);
-      const rows = await sql.query<OpportunityRow>(`${matchingOrders}
-        select o.id, o.title, o.category, o."specialtyCode", o.location, o.urgency, o."createdAt", o."proposalsCount"
-          from matching_orders o ${filter} order by ${order} limit $4 offset $5`,
-      [...params, query.pageSize, (query.page - 1) * query.pageSize]);
-      const specialties = await sql.query<EspecialidadeResponse>(`${matchingOrders} select codigo, nome from specialties order by nome`, [providerId]);
-      return { ...criarPagina(rows.map(summary), query.page, query.pageSize, count?.total ?? 0), specialties };
-    }, 'repeatable read');
+    type ListRow = Omit<OpportunityRow, 'id'> & {
+      id: string | null; total: number; specialties: EspecialidadeResponse[];
+    };
+    const rows = await this.database.query<ListRow>(`${matchingOrders}, filtered_orders as materialized (
+      select o.id, o.title, o.category, o."specialtyCode", o.location, o.urgency, o."createdAt", o."proposalsCount"
+        from matching_orders o ${filter}
+    ), page_orders as (
+      select o.id, o.title, o.category, o."specialtyCode", o.location, o.urgency, o."createdAt", o."proposalsCount"
+        from filtered_orders o order by ${order} limit $4 offset $5
+    )
+    select o.*, totals.total,
+           (select coalesce(jsonb_agg(jsonb_build_object('codigo', codigo, 'nome', nome) order by nome), '[]'::jsonb)
+              from specialties) as specialties
+      from (select count(*) as total from filtered_orders) totals
+      left join page_orders o on true
+     order by ${order}`,
+    [providerId, query.category, query.search, query.pageSize, (query.page - 1) * query.pageSize]);
+    // LEFT JOIN keeps totals/catalog even when the requested page contains no items.
+    const items = rows.filter((row): row is ListRow & { id: string } => row.id !== null).map(summary);
+    return { ...criarPagina(items, query.page, query.pageSize, rows[0]?.total ?? 0), specialties: rows[0]?.specialties ?? [] };
   }
 
-  getById(id: string, providerId: string): Promise<OportunidadeDetalhe | null> {
-    return this.database.transaction(async sql => {
-      const [row] = await sql.query<OpportunityRow>(`${matchingOrders}
-        select o.*, coalesce(btrim(o.escopo->>'descricao'), '') as description,
-               nullif(btrim(o.escopo->>'detalhes'), '') as details,
-               nullif(btrim(o.escopo->>'especificacoes'), '') as specifications
-          from matching_orders o where o.id = $2`, [providerId, id]);
-      if (!row) return null;
-      const [client] = await sql.query<Omit<OportunidadeDetalhe['client'], 'memberSince'> & { memberSince: Date }>(`
-        select u.name, u.created_at as "memberSince",
-               (select count(*) from public.pedidos history where history.id_cliente = u.id) as "ordersCount",
-               (select count(*) from public.pedidos history where history.id_cliente = u.id and history.status = 'concluido') as "completedOrdersCount"
-          from public.users u join public.pedidos p on p.id_cliente = u.id where p.id = $1`, [id]);
-      if (!client) return null;
-      const photos = await sql.query<FotoPedidoResponse>(`select id, foto as url, descricao as description
-        from public.fotos_pedido where id_pedido = $1 order by id`, [id]);
-      return {
-        ...summary(row), description: row.description ?? '', details: row.details ?? undefined,
-        specifications: row.specifications ?? undefined,
-        photos: photos.map(photo => ({ ...photo, description: photo.description ?? undefined })),
-        client: { ...client, memberSince: client.memberSince.toISOString() }
-      };
-    }, 'repeatable read');
+  async getById(id: string, providerId: string): Promise<OportunidadeDetalhe | null> {
+    type DetailRow = OpportunityRow & {
+      clientName: string; memberSince: Date; ordersCount: number; completedOrdersCount: number;
+      photos: FotoPedidoResponse[];
+    };
+    const [row] = await this.database.query<DetailRow>(`${matchingOrders}
+      select o.*, coalesce(btrim(o.escopo->>'descricao'), '') as description,
+             nullif(btrim(o.escopo->>'detalhes'), '') as details,
+             nullif(btrim(o.escopo->>'especificacoes'), '') as specifications,
+             u.name as "clientName", u.created_at as "memberSince",
+             (select count(*) from public.pedidos history where history.id_cliente=u.id) as "ordersCount",
+             (select count(*) from public.pedidos history where history.id_cliente=u.id and history.status='concluido') as "completedOrdersCount",
+             (select coalesce(jsonb_agg(jsonb_build_object('id', photo.id, 'url', photo.foto, 'description', photo.descricao) order by photo.id), '[]'::jsonb)
+                from public.fotos_pedido photo where photo.id_pedido=o.id) as photos
+        from matching_orders o
+        join public.pedidos p on p.id=o.id
+        join public.users u on u.id=p.id_cliente
+       where o.id=$2`, [providerId, id]);
+    if (!row) return null;
+    return {
+      ...summary(row), description: row.description ?? '', details: row.details ?? undefined,
+      specifications: row.specifications ?? undefined,
+      photos: row.photos.map(photo => ({ ...photo, description: photo.description ?? undefined })),
+      client: { name: row.clientName, memberSince: row.memberSince.toISOString(),
+        ordersCount: row.ordersCount, completedOrdersCount: row.completedOrdersCount }
+    };
   }
 }
