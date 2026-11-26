@@ -8,6 +8,7 @@ import type {
   PropostasNovasResponse
 } from '../../application/dtos/propostas.js';
 import type { Database } from '../database.js';
+import { gerarContrato } from './contrato-repository.js';
 import { tituloColumn } from './pedido-queries.js';
 import { propostaColumns, propostaFrom, toProposta, type PropostaRow } from './proposta-sql.js';
 
@@ -109,6 +110,8 @@ export class PropostaRepository implements IPropostaRepository {
         [orderId, proposalId]
       );
       await sql.query('update public.pedidos set data_atualizacao = now() where id = $1;', [orderId]);
+      // O contrato nasce com o aceite, na mesma transação: não existe proposta escolhida sem contrato (#95).
+      await gerarContrato(sql, orderId);
       return 'ok';
     });
   }
