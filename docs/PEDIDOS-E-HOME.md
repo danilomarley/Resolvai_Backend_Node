@@ -24,6 +24,8 @@ Os nomes seguem a API C# para facilitar a comparação. Os campos do JSON e os v
 | POST | `/api/v1/orders` | Cria um pedido para o cliente autenticado | Resolvai_Cliente#51 |
 | GET | `/api/v1/orders?status=&page=1&pageSize=10` | Lista paginada dos pedidos do usuário (Seus Pedidos) | Resolvai_Cliente#49 |
 | GET | `/api/v1/orders/{id}` | Detalhe de um pedido com escopo, fotos e propostas | Resolvai_Cliente#49 |
+| PATCH | `/api/v1/orders/{id}` | Edita um pedido aberto e sem proposta aceita | Resolvai_Cliente#85 |
+| POST | `/api/v1/orders/{id}/cancel` | Cancela um pedido aberto e sem proposta aceita, com motivo opcional | Resolvai_Cliente#85 |
 | GET | `/api/v1/home/summary` | Dados dos cards e os 5 pedidos mais recentes | Resolvai_Cliente#50 |
 | GET | `/api/v1/orders/{id}/proposals?sort=&direction=` | Propostas recebidas pelo pedido, ordenáveis | Resolvai_Cliente#83 |
 | GET | `/api/v1/orders/{id}/proposals/{proposalId}` | Detalhe da proposta com o resumo do prestador | Resolvai_Cliente#83 |
@@ -149,10 +151,27 @@ Retorna os campos da listagem, exceto os dois de propostas, e acrescenta:
 | `description` | `escopo.descricao` (sempre presente, `""` se ausente) |
 | `location` | `escopo.localizacao` |
 | `scope` | `escopo` completo, como JSON |
+| `cancellationReason` | `pedidos.motivo_cancelamento`, só em pedidos cancelados com motivo informado |
 | `photos[]` | `fotos_pedido`: `id`, `url` (valor da coluna `foto`, URL ou caminho no storage), `description` |
 | `proposals[]` | `propostas` + `users` + `avaliacoes`: `id`, `providerId`, `providerName`, `status`, `value`, `deadline`, `deadlineDays`, `description`, `warranty`, `createdAt`, `providerRating` (ver abaixo) |
 
 As propostas vêm com a escolhida primeiro, depois por valor crescente. Consultar o detalhe do pedido não marca propostas como visualizadas (quem marca é o detalhe da proposta, abaixo). Pedido inexistente ou de outro usuário retorna 404, assim como um identificador que não seja UUID.
+
+## Editar e cancelar pedido (#85)
+
+Valem para o dono do pedido. Outro usuário, pedido inexistente ou identificador que não seja UUID retornam 404, como nas demais rotas de pedidos.
+
+### PATCH /api/v1/orders/{id}
+
+Corpo igual ao de `POST /api/v1/orders`, com as mesmas validações. O pedido passa a ter exatamente os campos e as fotos enviados (as fotos anteriores são substituídas), então o front envia o formulário completo. Devolve o detalhe atualizado, com `updatedAt` novo.
+
+### POST /api/v1/orders/{id}/cancel
+
+Corpo opcional: `{ "reason": "..." }`, até 500 caracteres, guardado em `pedidos.motivo_cancelamento` (script `018_add_motivo_cancelamento_pedidos.sql`). O pedido passa para `Cancelled` e as propostas ainda pendentes (`Sent` e `Viewed`) passam para `NotChosen`, de modo que os prestadores as vejam como não selecionadas. Devolve o detalhe atualizado.
+
+### Quando recusa (409)
+
+As duas rotas só funcionam enquanto o pedido está aberto (`Pending`) e nenhuma proposta foi aceita. Pedido cancelado, concluído ou em andamento, ou com proposta `Chosen`, retorna 409 com a mensagem em `detail`. A checagem e a gravação acontecem na mesma transação, com o pedido travado, então um aceite simultâneo não passa despercebido.
 
 ## Propostas do pedido (#83)
 
