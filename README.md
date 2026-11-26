@@ -97,6 +97,7 @@ tests/                 Vitest
 | PATCH | `/api/v1/users/{id}/status` | Admin |
 | GET | `/api/v1/orders` | autenticado |
 | POST | `/api/v1/orders` | autenticado (Cliente com cadastro finalizado) |
+| GET | `/api/v1/proposals/unviewed` | autenticado, propostas novas do cliente (#90) |
 | GET | `/api/v1/orders/{id}` | autenticado |
 | PATCH | `/api/v1/orders/{id}` | autenticado, dono do pedido aberto e sem proposta aceita (#85) |
 | POST | `/api/v1/orders/{id}/cancel` | autenticado, dono do pedido aberto e sem proposta aceita (#85) |

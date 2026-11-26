@@ -29,6 +29,7 @@ Os nomes seguem a API C# para facilitar a comparação. Os campos do JSON e os v
 | GET | `/api/v1/home/summary` | Dados dos cards e os 5 pedidos mais recentes | Resolvai_Cliente#50 |
 | GET | `/api/v1/orders/{id}/proposals?sort=&direction=` | Propostas recebidas pelo pedido, ordenáveis | Resolvai_Cliente#83 |
 | GET | `/api/v1/orders/{id}/proposals/{proposalId}` | Detalhe da proposta com o resumo do prestador | Resolvai_Cliente#83 |
+| GET | `/api/v1/proposals/unviewed?limit=` | Propostas novas do cliente, para os alertas da navbar | Resolvai_Cliente#90 |
 
 Todas exigem `Authorization: Bearer <accessToken>` obtido no login. Todos os papéis, inclusive Admin, consultam apenas os pedidos em que são o cliente (`pedidos.id_cliente`). O identificador do usuário vem do token, nunca de parâmetros enviados pelo cliente. Usuários inativos ou tokens inválidos recebem 401. As respostas HTTP não devem ser armazenadas em cache (`Cache-Control: no-store`). Campos nulos são omitidos, conforme a configuração geral da API.
 
@@ -219,6 +220,20 @@ Devolve os campos da proposta e `providerProfile`:
 `memberSince` vem de `users.created_at`. `completedServices` conta os pedidos concluídos em que o prestador foi o escolhido.
 
 **Efeito colateral:** abrir o detalhe de uma proposta `Sent` a marca como `Viewed` (`visualizada` no banco) e a resposta já traz o status novo. Isso alimenta `proposals.unviewed` da Home. A listagem e `GET /api/v1/orders/{id}` não marcam nada.
+
+### GET /api/v1/proposals/unviewed (#90)
+
+Alimenta o ícone de alertas da navbar. Devolve `{ total, items[] }` com as propostas **ainda não visualizadas** (`Sent`) dos pedidos **abertos** do cliente, as mais recentes primeiro. É o mesmo critério de `proposals.unviewed` da Home, então os dois números batem.
+
+| Campo | Origem |
+| --- | --- |
+| `total` | Contagem completa, independente do `limit` |
+| `items[].id` | Id da proposta |
+| `items[].orderId`, `orderTitle` | Pedido (título como nas demais listagens) |
+| `items[].providerName` | `users.name` do prestador |
+| `items[].value`, `createdAt` | Valor e data de envio |
+
+`limit` vai de 1 a 20 (padrão 10) e só corta a lista. Abrir o detalhe da proposta (`GET /orders/{id}/proposals/{proposalId}`) a marca como `Viewed` e ela sai daqui; a listagem não marca nada. Proposta de pedido cancelado, em andamento ou já com proposta aceita não conta.
 
 ## GET /api/v1/home/summary
 
