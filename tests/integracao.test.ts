@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -23,6 +23,8 @@ import { PropostaFornecedorRepository } from '../src/infrastructure/repositories
 import { AvaliacaoService } from '../src/application/services/avaliacao-service.js';
 import { AvaliacaoRepository } from '../src/infrastructure/repositories/avaliacao-repository.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
+import { ContratoService } from '../src/application/services/contrato-service.js';
+import { ContratoRepository } from '../src/infrastructure/repositories/contrato-repository.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
 import { PrestadorService } from '../src/application/services/prestador-service.js';
@@ -161,6 +163,7 @@ describe('Integração com PostgreSQL', () => {
         propostaFornecedorService: new PropostaFornecedorService(fornecedorService, new PropostaFornecedorRepository(database), armazenamento),
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
+        contratoService: new ContratoService(new ContratoRepository(database)),
         propostaService: new PropostaService(new PropostaRepository(database), new PedidoQueries(database)),
         prestadorService: new PrestadorService(new PrestadorRepository(database), users, fornecedores),
         propostaPrestadorService: new PropostaPrestadorService(new PropostaPrestadorRepository(database), fornecedorService, armazenamento),
@@ -1534,6 +1537,136 @@ describe('Integração com PostgreSQL', () => {
 
       expect((await chamar('GET', `/api/v1/orders/${ped(1)}/proposals/${prop(1)}`, n.dono)).statusCode).toBe(200);
       expect(await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.dono))).toEqual({ total: 0, items: [] });
+    });
+  });
+
+  describe('contrato de prestação de serviços (#95)', () => {
+    const k = {
+      cliente: 'a1000000-0000-4000-8000-000000000001',
+      outro: 'a1000000-0000-4000-8000-000000000002',
+      ana: 'a1000000-0000-4000-8000-0000000000a1',
+      bruno: 'a1000000-0000-4000-8000-0000000000b2'
+    };
+    const ped = (x: number) => `a2000000-0000-4000-8000-00000000000${x}`;
+    const prop = { ana: 'a3000000-0000-4000-8000-0000000000a1', bruno: 'a3000000-0000-4000-8000-0000000000b2', antiga: 'a3000000-0000-4000-8000-0000000000c3' };
+    const urlCliente = (x: number, resto = '') => `/api/v1/orders/${ped(x)}/contract${resto}`;
+    const urlPrestador = (proposta: string, resto = '') => `/api/v1/provider/proposals/${proposta}/contract${resto}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+    const hash = (texto: string) => createHash('sha256').update(texto, 'utf8').digest('hex');
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${k.cliente}', 'Maria Contratante', 'maria95@teste.com', 'Cliente', '95000000011', now()),
+          ('${k.outro}', 'Outro Contratante', 'outro95@teste.com', 'Cliente', '95000000022', now()),
+          ('${k.ana}', 'Ana Eletricista', 'ana95@teste.com', 'Prestador', '95000000033', now()),
+          ('${k.bruno}', 'Bruno Pedreiro', 'bruno95@teste.com', 'Prestador', '95000000044', now());
+
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${k.cliente}', '{"titulo":"Trocar o chuveiro","categoria":"Elétrica","descricao":"Chuveiro queimou e precisa de troca","localizacao":"Meireles, Fortaleza","especificacoes":"Trocar e testar"}', 'aberto'),
+          ('${ped(2)}', '${k.cliente}', '{"titulo":"Pedido antigo"}', 'aberto');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias, descricao, garantia, garantia_condicoes) values
+          ('${prop.ana}', '${ped(1)}', '${k.ana}', 'enviada', 800.00, '5 dias úteis', 5, 'Instalação completa', '90 dias', 'Não cobre mau uso'),
+          ('${prop.bruno}', '${ped(1)}', '${k.bruno}', 'enviada', 700.00, '3 dias', 3, null, '30 dias', null),
+          -- aceita antes de existir a tabela de contratos: o contrato é gerado na primeira consulta
+          ('${prop.antiga}', '${ped(2)}', '${k.ana}', 'escolhida', 250.00, '2 dias', 2, null, '60 dias', null);
+      `);
+    });
+
+    it('sem proposta aceita não há contrato, e só o contratante dono do pedido o consulta depois', async () => {
+      expect((await chamar('GET', urlCliente(1), k.cliente)).statusCode).toBe(404);
+      expect((await chamar('GET', urlPrestador(prop.ana), k.ana)).statusCode).toBe(404);
+
+      expect((await chamar('POST', `/api/v1/orders/${ped(1)}/proposals/${prop.ana}/accept`, k.cliente)).statusCode).toBe(200);
+
+      expect((await app.inject({ method: 'GET', url: urlCliente(1) })).statusCode).toBe(401);
+      expect((await chamar('GET', urlCliente(1), k.outro)).statusCode).toBe(404);
+      expect((await chamar('GET', '/api/v1/orders/abc/contract', k.cliente)).statusCode).toBe(404);
+    });
+
+    it('o aceite gera o contrato com os dados da proposta, o hash do texto e o documento mascarado', async () => {
+      const contrato = await corpoDe(chamar('GET', urlCliente(1), k.cliente));
+      expect(contrato).toMatchObject({
+        orderId: ped(1), proposalId: prop.ana, status: 'Pending', value: 800,
+        customerName: 'Maria Contratante', providerName: 'Ana Eletricista', templateVersion: '2026-11-v1'
+      });
+      expect(contrato.customerSignedAt).toBeUndefined();
+      expect(contrato.providerSignedAt).toBeUndefined();
+      expect(contrato.textHash).toBe(hash(contrato.text));
+      expect(contrato.text).toContain('CONTRATANTE: Maria Contratante, CPF ***.000.000-**.');
+      expect(contrato.text).toContain('PRESTADOR: Ana Eletricista, CPF ***.000.000-**.');
+      expect(contrato.text).toContain('o serviço "Trocar o chuveiro" (Elétrica), no local Meireles, Fortaleza');
+      expect(contrato.text).toMatch(/O valor total do serviço é de R\$\s?800,00\./);
+      expect(contrato.text).toContain('Prazo de execução: 5 dias úteis');
+      expect(contrato.text).toContain('Garantia do serviço: 90 dias.');
+      expect(contrato.text).toContain('Condições da garantia: Não cobre mau uso');
+      expect(contrato.text).not.toContain('95000000011');
+
+      // A mesma consulta devolve o mesmo contrato, sem gerar outro.
+      expect((await corpoDe(chamar('GET', urlCliente(1), k.cliente))).id).toBe(contrato.id);
+      expect((await pglite.query(`select count(*)::int as n from contratos where id_pedido = '${ped(1)}'`)).rows).toEqual([{ n: 1 }]);
+    });
+
+    it('o prestador escolhido vê o mesmo contrato; outro prestador e o contratante nessa rota não', async () => {
+      const doCliente = await corpoDe(chamar('GET', urlCliente(1), k.cliente));
+      const doPrestador = await corpoDe(chamar('GET', urlPrestador(prop.ana), k.ana));
+      expect(doPrestador).toEqual(doCliente);
+
+      expect((await chamar('GET', urlPrestador(prop.ana), k.bruno)).statusCode).toBe(404);
+      expect((await chamar('GET', urlPrestador(prop.bruno), k.bruno)).statusCode).toBe(404);
+      expect((await chamar('GET', urlPrestador(prop.ana), k.cliente)).statusCode).toBe(403);
+    });
+
+    it('as duas partes assinam: Pending até a segunda assinatura, depois Signed, com data e IP registrados', async () => {
+      const { textHash } = await corpoDe(chamar('GET', urlCliente(1), k.cliente));
+
+      expect((await chamar('POST', urlCliente(1, '/sign'), k.cliente, {})).statusCode).toBe(400);
+      expect((await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash: 'abc' })).statusCode).toBe(400);
+      const outroTexto = await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash: 'f'.repeat(64) });
+      expect(outroTexto.statusCode).toBe(409);
+      expect(outroTexto.json().detail).toContain('não é mais o que você leu');
+      expect((await chamar('POST', urlCliente(1, '/sign'), k.outro, { textHash })).statusCode).toBe(404);
+      expect((await chamar('POST', urlPrestador(prop.ana, '/sign'), k.bruno, { textHash })).statusCode).toBe(404);
+
+      const doCliente = await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash: textHash.toUpperCase() });
+      expect(doCliente.statusCode).toBe(200);
+      expect(doCliente.json()).toMatchObject({ status: 'Pending', customerSignedAt: expect.any(String) });
+      expect(doCliente.json().providerSignedAt).toBeUndefined();
+
+      // O prestador já vê que o contratante assinou, e o contratante não assina duas vezes.
+      expect((await corpoDe(chamar('GET', urlPrestador(prop.ana), k.ana))).customerSignedAt).toEqual(expect.any(String));
+      const repetido = await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash });
+      expect(repetido.statusCode).toBe(409);
+      expect(repetido.json().detail).toBe('Você já assinou este contrato.');
+
+      const doPrestador = await chamar('POST', urlPrestador(prop.ana, '/sign'), k.ana, { textHash });
+      expect(doPrestador.statusCode).toBe(200);
+      expect(doPrestador.json()).toMatchObject({ status: 'Signed', customerSignedAt: expect.any(String), providerSignedAt: expect.any(String) });
+      expect((await chamar('POST', urlPrestador(prop.ana, '/sign'), k.ana, { textHash })).statusCode).toBe(409);
+      expect((await corpoDe(chamar('GET', urlCliente(1), k.cliente))).status).toBe('Signed');
+
+      const registro = (await pglite.query<{ cliente: string | null; prestador: string | null; status: string }>(
+        `select assinatura_cliente_ip as cliente, assinatura_prestador_ip as prestador, status from contratos where id_pedido = '${ped(1)}'`
+      )).rows[0]!;
+      expect(registro.status).toBe('assinado');
+      expect(registro.cliente).toBeTruthy();
+      expect(registro.prestador).toBeTruthy();
+    });
+
+    it('quem assina primeiro pode ser o prestador, e a proposta aceita antes da tabela ganha o contrato na primeira consulta', async () => {
+      const gerado = await corpoDe(chamar('GET', urlCliente(2), k.cliente));
+      expect(gerado).toMatchObject({ proposalId: prop.antiga, status: 'Pending', value: 250 });
+      expect(gerado.text).toContain('Prazo de execução: 2 dias');
+      expect(gerado.text).toContain('Garantia do serviço: 60 dias.');
+
+      const doPrestador = await chamar('POST', urlPrestador(prop.antiga, '/sign'), k.ana, { textHash: gerado.textHash });
+      expect(doPrestador.json()).toMatchObject({ status: 'Pending', providerSignedAt: expect.any(String) });
+      expect(doPrestador.json().customerSignedAt).toBeUndefined();
+
+      const completo = await chamar('POST', urlCliente(2, '/sign'), k.cliente, { textHash: gerado.textHash });
+      expect(completo.json().status).toBe('Signed');
     });
   });
 

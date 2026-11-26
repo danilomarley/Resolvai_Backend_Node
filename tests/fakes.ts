@@ -19,6 +19,8 @@ import type {
 import { criarPagina, type PaginaResponse } from '../src/application/dtos/common.js';
 import type { ResumoHomeResponse } from '../src/application/dtos/home.js';
 import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse, PropostaResponse } from '../src/application/dtos/pedidos.js';
+import type { ContratoResponse } from '../src/application/dtos/contratos.js';
+import type { IContratoRepository, ResultadoAssinatura } from '../src/application/services/contrato-service.js';
 import type {
   DirecaoPropostas,
   OrdenacaoPropostas,
@@ -142,6 +144,25 @@ export class FakePropostaRepository implements IPropostaRepository {
   async listUnviewed(customerId: string, limit: number) {
     this.lastUnviewed = { customerId, limit };
     return this.novas;
+  }
+}
+
+export class FakeContratoRepository implements IContratoRepository {
+  contrato: ContratoResponse | null = null;
+  signResult: ResultadoAssinatura = 'ok';
+  signed: { contractId: string; parte: string; userId: string; textHash: string; ip: string | null }[] = [];
+
+  async getForCustomer() {
+    return this.contrato;
+  }
+
+  async getForProvider() {
+    return this.contrato;
+  }
+
+  async sign(contractId: string, parte: string, userId: string, textHash: string, ip: string | null) {
+    this.signed.push({ contractId, parte, userId, textHash, ip });
+    return this.signResult;
   }
 }
 

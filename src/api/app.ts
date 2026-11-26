@@ -22,6 +22,8 @@ import { authRoutes } from './routes/auth-routes.js';
 import { homeRoutes } from './routes/home-routes.js';
 import { pedidosRoutes } from './routes/pedidos-routes.js';
 import { propostasRoutes } from './routes/propostas-routes.js';
+import { contratosRoutes } from './routes/contratos-routes.js';
+import type { ContratoService } from '../application/services/contrato-service.js';
 import { prestadorRoutes } from './routes/prestador-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
 import { propostasFornecedorRoutes } from './routes/propostas-fornecedor-routes.js';
@@ -38,6 +40,7 @@ export interface Dependencias {
   userService: UserService;
   pedidoService: PedidoService;
   propostaService: PropostaService;
+  contratoService: ContratoService;
   prestadorService: PrestadorService;
   propostaPrestadorService: PropostaPrestadorService;
   fotoPedidoService: FotoPedidoService;
@@ -126,6 +129,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
     await protegido.register(propostasFornecedorRoutes(dependencias.propostaFornecedorService));
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(propostasRoutes(dependencias.propostaService));
+    await protegido.register(contratosRoutes(dependencias.contratoService));
     await protegido.register(prestadorRoutes(dependencias.prestadorService, dependencias.propostaPrestadorService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
     await protegido.register(avaliacoesRoutes(dependencias.avaliacaoService));

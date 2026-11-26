@@ -12,6 +12,7 @@ import { AvaliacaoService } from '../src/application/services/avaliacao-service.
 import { PropostaFornecedorService } from '../src/application/services/proposta-fornecedor-service.js';
 import type { IPropostaFornecedorRepository } from '../src/application/dtos/propostas-fornecedor.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
+import { ContratoService } from '../src/application/services/contrato-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
 import { PrestadorService, type IPrestadorRepository } from '../src/application/services/prestador-service.js';
@@ -27,6 +28,7 @@ import {
   FakeEspecialidades,
   FakeFornecedores,
   FakeEnderecos,
+  FakeContratoRepository,
   FakePedidoRepository,
   FakePropostaRepository,
   FakeQueries,
@@ -77,6 +79,7 @@ describe('API HTTP', () => {
         especialidadeQueries: especialidades,
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
+        contratoService: new ContratoService(new FakeContratoRepository()),
         propostaService: new PropostaService(propostas, queries),
         prestadorService: new PrestadorService({ async listCategorias() { return []; } } as unknown as IPrestadorRepository, users),
         propostaPrestadorService: new PropostaPrestadorService({} as unknown as IPropostaPrestadorRepository, fornecedorService),
