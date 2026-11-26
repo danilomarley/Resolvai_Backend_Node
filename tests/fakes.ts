@@ -10,6 +10,7 @@ import type {
   IEnderecoRepository,
   IPedidoQueries,
   IPedidoRepository,
+  ResultadoAlteracaoPedido,
   ISupabaseAuthClient,
   IUserRepository,
   SupabaseAuthUser,
@@ -142,6 +143,26 @@ export class FakePedidoRepository implements IPedidoRepository {
     this.lastClienteId = idCliente;
     this.lastEscopo = escopoJson;
     this.lastFotos = fotos.length;
+  }
+
+  result: ResultadoAlteracaoPedido = 'ok';
+  updated = 0;
+  cancelled = 0;
+  lastCancelReason: string | null | undefined;
+
+  async update(_id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]) {
+    this.updated++;
+    this.lastClienteId = idCliente;
+    this.lastEscopo = escopoJson;
+    this.lastFotos = fotos.length;
+    return this.result;
+  }
+
+  async cancel(_id: string, idCliente: string, motivo: string | null) {
+    this.cancelled++;
+    this.lastClienteId = idCliente;
+    this.lastCancelReason = motivo;
+    return this.result;
   }
 }
 

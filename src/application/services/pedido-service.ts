@@ -1,11 +1,18 @@
 import { randomUUID } from 'node:crypto';
 import { UserRole } from '../../domain/enums.js';
 import { DomainException } from '../../domain/errors.js';
-import type { CurrentUser, IPedidoQueries, IPedidoRepository, IUserRepository } from '../contracts.js';
+import type { CurrentUser, IPedidoQueries, IPedidoRepository, IUserRepository, ResultadoAlteracaoPedido } from '../contracts.js';
 import type { PaginaResponse } from '../dtos/common.js';
 import type { ResumoHomeResponse } from '../dtos/home.js';
-import type { CriarPedidoRequest, ListarPedidosQuery, PedidoResponse, PedidoResumoResponse } from '../dtos/pedidos.js';
-import { NotFoundException, UnauthorizedException } from '../errors.js';
+import type {
+  CancelarPedidoRequest,
+  CriarPedidoRequest,
+  EditarPedidoRequest,
+  ListarPedidosQuery,
+  PedidoResponse,
+  PedidoResumoResponse
+} from '../dtos/pedidos.js';
+import { ConflictException, NotFoundException, UnauthorizedException } from '../errors.js';
 
 const guidVazio = '00000000-0000-0000-0000-000000000000';
 
@@ -37,6 +44,21 @@ export class PedidoService {
     }
 
     return pedido;
+  }
+
+  /** Edita um pedido ainda sem proposta aceita (#85). Só o dono altera; outro usuário recebe 404. */
+  async editar(currentUser: CurrentUser, id: string, request: EditarPedidoRequest): Promise<PedidoResponse> {
+    const userId = getUserId(currentUser);
+    recusarSeNaoAlterou(await this.pedidoRepository.update(id, userId, montarEscopo(request), request.fotos), id, 'alterado');
+    return this.getById(currentUser, id);
+  }
+
+  /** Cancela um pedido ainda sem proposta aceita, com motivo opcional (#85). */
+  async cancelar(currentUser: CurrentUser, id: string, request: CancelarPedidoRequest): Promise<PedidoResponse> {
+    const userId = getUserId(currentUser);
+    const motivo = request.reason?.trim() || null;
+    recusarSeNaoAlterou(await this.pedidoRepository.cancel(id, userId, motivo), id, 'cancelado');
+    return this.getById(currentUser, id);
   }
 
   // Os limites de página são validados no schema da rota (listarPedidosQuerySchema).
@@ -79,6 +101,18 @@ export function montarEscopo(request: CriarPedidoRequest): string {
   adicionar('especificacoes', request.especificacoes);
 
   return JSON.stringify(escopo);
+}
+
+function recusarSeNaoAlterou(resultado: ResultadoAlteracaoPedido, id: string, acao: 'alterado' | 'cancelado'): void {
+  switch (resultado) {
+    case 'notFound':
+      throw new NotFoundException('Pedido', id);
+    case 'closed':
+      throw new ConflictException(`Este pedido não pode mais ser ${acao}: ele já foi cancelado, concluído ou está em andamento.`);
+    case 'proposalChosen':
+      throw new ConflictException(`Este pedido não pode mais ser ${acao}: uma proposta já foi aceita.`);
+    default:
+  }
 }
 
 function getUserId(currentUser: CurrentUser): string {

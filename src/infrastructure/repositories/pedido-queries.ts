@@ -62,6 +62,7 @@ interface PedidoRow {
   createdAt: Date;
   updatedAt: Date | null;
   scope: unknown;
+  cancellationReason: string | null;
 }
 
 interface FotoRow {
@@ -111,7 +112,8 @@ export class PedidoQueries implements IPedidoQueries {
                 ${statusPedidoColumn} as "status",
                 p.data_criacao as "createdAt",
                 p.data_atualizacao as "updatedAt",
-                p.escopo as "scope"
+                p.escopo as "scope",
+                p.motivo_cancelamento as "cancellationReason"
            from public.pedidos p
           where p.id = $1 and p.id_cliente = $2;`,
         [id, userId]
@@ -235,6 +237,7 @@ function toPedido(row: PedidoRow, photos: FotoPedidoResponse[], proposals: Propo
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt?.toISOString(),
     scope: opcional(row.scope),
+    cancellationReason: opcional(row.cancellationReason),
     photos,
     proposals
   };

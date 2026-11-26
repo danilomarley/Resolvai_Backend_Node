@@ -57,7 +57,17 @@ export interface IPedidoQueries {
 
 export interface IPedidoRepository {
   add(id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]): Promise<void>;
+  /** Troca escopo e fotos de um pedido aberto, sem proposta aceita (#85). */
+  update(id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]): Promise<ResultadoAlteracaoPedido>;
+  /** Cancela um pedido aberto, sem proposta aceita, e libera as propostas pendentes (#85). */
+  cancel(id: string, idCliente: string, motivo: string | null): Promise<ResultadoAlteracaoPedido>;
 }
+
+/**
+ * notFound: o pedido não existe ou é de outro cliente. closed: já foi cancelado, concluído ou está em andamento.
+ * proposalChosen: o cliente já aceitou uma proposta.
+ */
+export type ResultadoAlteracaoPedido = 'ok' | 'notFound' | 'closed' | 'proposalChosen';
 
 export interface IOportunidadeQueries {
   list(providerId: string, query: ListarOportunidadesQuery): Promise<OportunidadesResponse>;

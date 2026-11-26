@@ -81,6 +81,21 @@ export const criarPedidoRequestSchema = z.object({
 export type CriarPedidoRequest = z.output<typeof criarPedidoRequestSchema>;
 
 /**
+ * Corpo de PATCH /api/v1/orders/{id} (#85): as mesmas regras da criação. O pedido passa a ter exatamente
+ * os campos e as fotos enviados, então o front manda o formulário completo.
+ */
+export const editarPedidoRequestSchema = criarPedidoRequestSchema;
+
+export type EditarPedidoRequest = CriarPedidoRequest;
+
+export const cancelarPedidoRequestSchema = z
+  .object({ reason: textoOpcional('Reason', 500) })
+  .nullish()
+  .transform(corpo => corpo ?? {});
+
+export type CancelarPedidoRequest = z.output<typeof cancelarPedidoRequestSchema>;
+
+/**
  * Item de listagem: usado em Seus Pedidos e nos pedidos recentes da Home.
  */
 export const pedidoResumoResponseSchema = z.object({
@@ -142,6 +157,7 @@ export const pedidoResponseSchema = z.object({
   createdAt: dataIso,
   updatedAt: dataIso.optional(),
   scope: z.unknown().optional().describe('Conteúdo completo de pedidos.escopo.'),
+  cancellationReason: z.string().optional().describe('Motivo informado pelo cliente ao cancelar o pedido, se houver.'),
   photos: z.array(fotoPedidoResponseSchema),
   proposals: z.array(propostaResponseSchema)
 });
