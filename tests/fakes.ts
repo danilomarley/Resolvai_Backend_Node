@@ -19,7 +19,12 @@ import type {
 import { criarPagina, type PaginaResponse } from '../src/application/dtos/common.js';
 import type { ResumoHomeResponse } from '../src/application/dtos/home.js';
 import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse, PropostaResponse } from '../src/application/dtos/pedidos.js';
-import type { DirecaoPropostas, OrdenacaoPropostas, PropostaDetalheResponse } from '../src/application/dtos/propostas.js';
+import type {
+  DirecaoPropostas,
+  OrdenacaoPropostas,
+  PropostaDetalheResponse,
+  PropostasNovasResponse
+} from '../src/application/dtos/propostas.js';
 import type { IPropostaRepository, ResultadoAceite } from '../src/application/services/proposta-service.js';
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
@@ -129,6 +134,14 @@ export class FakePropostaRepository implements IPropostaRepository {
   async accept() {
     this.accepted++;
     return this.acceptResult;
+  }
+
+  novas: PropostasNovasResponse = { total: 0, items: [] };
+  lastUnviewed?: { customerId: string; limit: number };
+
+  async listUnviewed(customerId: string, limit: number) {
+    this.lastUnviewed = { customerId, limit };
+    return this.novas;
   }
 }
 

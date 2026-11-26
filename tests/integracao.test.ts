@@ -1466,6 +1466,77 @@ describe('Integração com PostgreSQL', () => {
     });
   });
 
+  describe('alertas de propostas novas (#90)', () => {
+    const n = {
+      dono: '9e000000-0000-4000-8000-000000000001',
+      outro: '9e000000-0000-4000-8000-000000000002',
+      ana: '9e000000-0000-4000-8000-0000000000a1',
+      bruno: '9e000000-0000-4000-8000-0000000000b2'
+    };
+    const ped = (x: number) => `9f000000-0000-4000-8000-00000000000${x}`;
+    const prop = (x: number) => `9f100000-0000-4000-8000-00000000000${x}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${n.dono}', 'Dono Alertas', 'dono90@teste.com', 'Cliente', '90000000011', now()),
+          ('${n.outro}', 'Outro Alertas', 'outro90@teste.com', 'Cliente', '90000000022', now()),
+          ('${n.ana}', 'Ana Eletricista', 'ana90@teste.com', 'Prestador', null, now()),
+          ('${n.bruno}', 'Bruno Pedreiro', 'bruno90@teste.com', 'Prestador', null, now());
+
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${n.dono}', '{"titulo":"Trocar chuveiro"}', 'aberto'),
+          ('${ped(2)}', '${n.dono}', '{"categoria":"Hidráulica"}', 'aberto'),
+          ('${ped(3)}', '${n.dono}', '{"titulo":"Cancelado"}', 'cancelado'),
+          ('${ped(4)}', '${n.dono}', '{"titulo":"Em andamento"}', 'em_andamento'),
+          ('${ped(5)}', '${n.outro}', '{"titulo":"Pedido do outro"}', 'aberto');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor, data_criacao) values
+          ('${prop(1)}', '${ped(1)}', '${n.ana}', 'enviada', 300, '2026-11-01T10:00:00Z'),
+          ('${prop(2)}', '${ped(1)}', '${n.bruno}', 'visualizada', 250, '2026-11-02T10:00:00Z'),
+          ('${prop(3)}', '${ped(2)}', '${n.ana}', 'enviada', 500.5, '2026-11-03T10:00:00Z'),
+          ('${prop(4)}', '${ped(3)}', '${n.ana}', 'enviada', 100, '2026-11-04T10:00:00Z'),
+          ('${prop(5)}', '${ped(4)}', '${n.ana}', 'escolhida', 100, '2026-11-05T10:00:00Z'),
+          ('${prop(6)}', '${ped(5)}', '${n.bruno}', 'enviada', 100, '2026-11-06T10:00:00Z');
+      `);
+    });
+
+    it('lista só as propostas enviadas e ainda não abertas de pedidos abertos do cliente, a mais recente primeiro', async () => {
+      expect((await app.inject({ method: 'GET', url: '/api/v1/proposals/unviewed' })).statusCode).toBe(401);
+
+      const corpo = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.dono));
+      expect(corpo.total).toBe(2);
+      expect(corpo.items).toEqual([
+        { id: prop(3), orderId: ped(2), orderTitle: 'Hidráulica', providerName: 'Ana Eletricista', value: 500.5, createdAt: '2026-11-03T10:00:00.000Z' },
+        { id: prop(1), orderId: ped(1), orderTitle: 'Trocar chuveiro', providerName: 'Ana Eletricista', value: 300, createdAt: '2026-11-01T10:00:00.000Z' }
+      ]);
+
+      const doOutro = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.outro));
+      expect(doOutro.items.map((i: { id: string }) => i.id)).toEqual([prop(6)]);
+    });
+
+    it('o limite corta a lista mas não o total, e valores inválidos são recusados', async () => {
+      const corpo = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed?limit=1', n.dono));
+      expect(corpo.total).toBe(2);
+      expect(corpo.items.map((i: { id: string }) => i.id)).toEqual([prop(3)]);
+      for (const limite of ['0', '21', 'abc']) {
+        expect((await chamar('GET', `/api/v1/proposals/unviewed?limit=${limite}`, n.dono)).statusCode).toBe(400);
+      }
+    });
+
+    it('abrir o detalhe da proposta tira ela da lista e do total', async () => {
+      expect((await chamar('GET', `/api/v1/orders/${ped(2)}/proposals/${prop(3)}`, n.dono)).statusCode).toBe(200);
+      const corpo = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.dono));
+      expect(corpo.total).toBe(1);
+      expect(corpo.items.map((i: { id: string }) => i.id)).toEqual([prop(1)]);
+
+      expect((await chamar('GET', `/api/v1/orders/${ped(1)}/proposals/${prop(1)}`, n.dono)).statusCode).toBe(200);
+      expect(await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.dono))).toEqual({ total: 0, items: [] });
+    });
+  });
+
   describe('avaliação pós-serviço (#92)', () => {
     const outroAvaliador = randomUUID();
     beforeAll(async () => {

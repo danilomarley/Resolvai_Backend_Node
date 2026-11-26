@@ -1,7 +1,14 @@
 import type { IPropostaRepository, ResultadoAceite } from '../../application/services/proposta-service.js';
 import type { PropostaResponse } from '../../application/dtos/pedidos.js';
-import type { DirecaoPropostas, OrdenacaoPropostas, PropostaDetalheResponse } from '../../application/dtos/propostas.js';
+import type {
+  DirecaoPropostas,
+  OrdenacaoPropostas,
+  PropostaDetalheResponse,
+  PropostaNovaResponse,
+  PropostasNovasResponse
+} from '../../application/dtos/propostas.js';
 import type { Database } from '../database.js';
+import { tituloColumn } from './pedido-queries.js';
 import { propostaColumns, propostaFrom, toProposta, type PropostaRow } from './proposta-sql.js';
 
 // Fragmentos fixos por ordenação; a direção vem de um enum validado, nunca do texto da requisição.
@@ -104,6 +111,39 @@ export class PropostaRepository implements IPropostaRepository {
       await sql.query('update public.pedidos set data_atualizacao = now() where id = $1;', [orderId]);
       return 'ok';
     });
+  }
+
+  listUnviewed(customerId: string, limit: number): Promise<PropostasNovasResponse> {
+    // Mesmo critério de proposals.unviewed da Home: proposta enviada e ainda não aberta, em pedido aberto.
+    const filtro = "p.id_cliente = $1 and p.status = 'aberto' and pr.status = 'enviada'";
+
+    return this.database.transaction(async sql => {
+      const [total] = await sql.query<{ total: number }>(
+        `select count(*) as "total"
+           from public.propostas pr
+           join public.pedidos p on p.id = pr.id_pedido
+          where ${filtro};`,
+        [customerId]
+      );
+
+      const rows = await sql.query<Omit<PropostaNovaResponse, 'createdAt'> & { createdAt: Date }>(
+        `select pr.id as "id",
+                p.id as "orderId",
+                ${tituloColumn} as "orderTitle",
+                u.name as "providerName",
+                pr.valor as "value",
+                pr.data_criacao as "createdAt"
+           from public.propostas pr
+           join public.pedidos p on p.id = pr.id_pedido
+           join public.users u on u.id = pr.id_prestador
+          where ${filtro}
+          order by pr.data_criacao desc, pr.id desc
+          limit $2;`,
+        [customerId, limit]
+      );
+
+      return { total: total?.total ?? 0, items: rows.map(row => ({ ...row, createdAt: row.createdAt.toISOString() })) };
+    }, 'repeatable read');
   }
 
   async markViewed(orderId: string, proposalId: string, customerId: string): Promise<boolean> {

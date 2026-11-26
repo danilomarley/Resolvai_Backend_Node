@@ -15,10 +15,19 @@ describe('PropostaService', () => {
     providerProfile: { memberSince: new Date().toISOString(), completedServices: 0 }
   });
   const novo = () => {
-    const repository: IPropostaRepository = { list: vi.fn(), getById: vi.fn(), markViewed: vi.fn(), accept: vi.fn() };
+    const repository: IPropostaRepository = { list: vi.fn(), getById: vi.fn(), markViewed: vi.fn(), accept: vi.fn(), listUnviewed: vi.fn() };
     const pedidos: IPedidoQueries = { list: vi.fn(), getById: vi.fn(), getSummary: vi.fn() };
     return { repository, pedidos, service: new PropostaService(repository, pedidos) };
   };
+
+  it('alertas da navbar (#90): usa o cliente do token e repassa o limite', async () => {
+    const { repository, service } = novo();
+    const resposta = { total: 1, items: [] };
+    vi.mocked(repository.listUnviewed).mockResolvedValue(resposta);
+    expect(await service.listarNovas(user, 5)).toBe(resposta);
+    expect(repository.listUnviewed).toHaveBeenCalledWith(user.id, 5);
+    await expect(service.listarNovas({ isAuthenticated: false }, 5)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
 
   it('exige usuário autenticado com identificação', async () => {
     const { repository, service } = novo();

@@ -1,5 +1,11 @@
 import type { PedidoResponse, PropostaResponse } from '../dtos/pedidos.js';
-import type { DirecaoPropostas, ListarPropostasQuery, OrdenacaoPropostas, PropostaDetalheResponse } from '../dtos/propostas.js';
+import type {
+  DirecaoPropostas,
+  ListarPropostasQuery,
+  OrdenacaoPropostas,
+  PropostaDetalheResponse,
+  PropostasNovasResponse
+} from '../dtos/propostas.js';
 import { StatusProposta } from '../../domain/enums.js';
 import type { CurrentUser, IPedidoQueries } from '../contracts.js';
 import { ConflictException, NotFoundException, UnauthorizedException } from '../errors.js';
@@ -18,6 +24,8 @@ export interface IPropostaRepository {
    * ele só entra em andamento depois do pagamento.
    */
   accept(orderId: string, proposalId: string, customerId: string): Promise<ResultadoAceite>;
+  /** Propostas ainda não visualizadas, em pedidos abertos do cliente: o total e as mais recentes (#90). */
+  listUnviewed(customerId: string, limit: number): Promise<PropostasNovasResponse>;
 }
 
 export type ResultadoAceite = 'ok' | 'notFound' | 'orderClosed' | 'alreadyChosen' | 'proposalUnavailable';
@@ -42,6 +50,11 @@ export class PropostaService {
     }
 
     return propostas;
+  }
+
+  /** Alertas da navbar (#90): as propostas que o cliente ainda não abriu. */
+  async listarNovas(currentUser: CurrentUser, limit: number): Promise<PropostasNovasResponse> {
+    return this.repository.listUnviewed(getUserId(currentUser), limit);
   }
 
   /**

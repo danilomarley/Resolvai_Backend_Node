@@ -1,7 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { listaPropostasResponseSchema, listarPropostasQuerySchema, propostaDetalheResponseSchema } from '../../application/dtos/propostas.js';
+import {
+  listaPropostasResponseSchema,
+  listarPropostasQuerySchema,
+  propostaDetalheResponseSchema,
+  propostasNovasQuerySchema,
+  propostasNovasResponseSchema
+} from '../../application/dtos/propostas.js';
 import { pedidoIdParamsSchema, pedidoResponseSchema } from '../../application/dtos/pedidos.js';
 import type { PropostaService } from '../../application/services/proposta-service.js';
 import { normalizarGuid } from '../guid.js';
@@ -15,6 +21,22 @@ const propostaParamsSchema = pedidoIdParamsSchema.extend({ proposalId: z.string(
 export function propostasRoutes(service: PropostaService) {
   return async (app: FastifyInstance) => {
     const rotas = app.withTypeProvider<ZodTypeProvider>();
+
+    rotas.get('/api/v1/proposals/unviewed', {
+      schema: {
+        tags: ['Propostas'],
+        summary: 'Propostas novas do cliente autenticado, para os alertas da navbar (Resolvai_Cliente#90).',
+        description:
+          'Lista as propostas ainda não visualizadas (status Sent) dos pedidos abertos, as mais recentes primeiro, e o total. ' +
+          'Abrir o detalhe de uma proposta a marca como visualizada e ela sai da lista.',
+        querystring: propostasNovasQuerySchema,
+        response: { 200: propostasNovasResponseSchema }
+      },
+      handler: async (request, reply) => {
+        semCache(reply);
+        return service.listarNovas(request.usuario, request.query.limit);
+      }
+    });
 
     rotas.get('/api/v1/orders/:id/proposals', {
       schema: {

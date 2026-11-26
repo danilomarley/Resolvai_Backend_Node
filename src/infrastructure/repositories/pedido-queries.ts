@@ -23,7 +23,7 @@ const statusPedidoColumn = `
 
 const categoriaColumn = `nullif(btrim(p.escopo ->> 'categoria'), '')`;
 
-const tituloColumn = `coalesce(nullif(btrim(p.escopo ->> 'titulo'), ''), ${categoriaColumn}, 'Pedido')`;
+export const tituloColumn = `coalesce(nullif(btrim(p.escopo ->> 'titulo'), ''), ${categoriaColumn}, 'Pedido')`;
 
 const resumoColumns = `
   select p.id as "id",
