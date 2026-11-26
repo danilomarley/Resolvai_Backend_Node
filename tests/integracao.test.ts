@@ -1349,6 +1349,123 @@ describe('Integração com PostgreSQL', () => {
     expect(resposta.json()).toEqual({ status: 'ok' });
   });
 
+  describe('editar e cancelar pedido (#85)', () => {
+    const e = {
+      dono: '8a000000-0000-4000-8000-000000000001',
+      outro: '8a000000-0000-4000-8000-000000000002',
+      prestador: '8a000000-0000-4000-8000-0000000000a1'
+    };
+    const ped = (n: number) => `8b000000-0000-4000-8000-00000000000${n}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+    const formulario = {
+      titulo: 'Trocar o chuveiro',
+      categoria: 'Elétrica',
+      descricao: 'Chuveiro queimou e precisa de troca.',
+      localizacao: 'Meireles, Fortaleza',
+      urgencia: 'Alta',
+      fotos: [{ url: 'https://exemplo.com/nova.jpg', descricao: 'Chuveiro' }]
+    };
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${e.dono}', 'Dono do Pedido', 'dono85@teste.com', 'Cliente', '85000000011', now()),
+          ('${e.outro}', 'Outro Cliente', 'outro85@teste.com', 'Cliente', '85000000022', now()),
+          ('${e.prestador}', 'Prestador 85', 'prest85@teste.com', 'Prestador', null, now());
+
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${e.dono}', '{"titulo":"Antigo","categoria":"Hidráulica","descricao":"Descrição antiga do pedido","localizacao":"Aldeota"}', 'aberto'),
+          ('${ped(2)}', '${e.dono}', '{"titulo":"Com propostas"}', 'aberto'),
+          ('${ped(3)}', '${e.dono}', '{"titulo":"Sem corpo"}', 'aberto'),
+          ('${ped(4)}', '${e.dono}', '{"titulo":"Proposta aceita"}', 'aberto'),
+          ('${ped(5)}', '${e.dono}', '{"titulo":"Em andamento"}', 'em_andamento'),
+          ('${ped(6)}', '${e.dono}', '{"titulo":"Já cancelado"}', 'cancelado');
+
+        insert into fotos_pedido (id, id_pedido, foto) values
+          ('8c000000-0000-4000-8000-000000000001', '${ped(1)}', 'https://exemplo.com/antiga.jpg');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor) values
+          ('8d000000-0000-4000-8000-000000000001', '${ped(2)}', '${e.prestador}', 'enviada', 100),
+          ('8d000000-0000-4000-8000-000000000002', '${ped(4)}', '${e.prestador}', 'escolhida', 200);
+      `);
+    });
+
+    it('edita o pedido: troca campos e fotos, atualiza a data e só o dono altera', async () => {
+      const corpo = { ...formulario };
+      expect((await app.inject({ method: 'PATCH', url: `/api/v1/orders/${ped(1)}`, payload: corpo })).statusCode).toBe(401);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.outro, corpo)).statusCode).toBe(404);
+      expect((await chamar('PATCH', '/api/v1/orders/abc', e.dono, corpo)).statusCode).toBe(404);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, { ...corpo, descricao: 'curta' })).statusCode).toBe(400);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, { ...corpo, fotos: Array(5).fill(corpo.fotos[0]) })).statusCode).toBe(400);
+
+      const resposta = await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, corpo);
+      expect(resposta.statusCode).toBe(200);
+      const pedido = resposta.json();
+      expect(pedido).toMatchObject({
+        id: ped(1), title: 'Trocar o chuveiro', category: 'Elétrica', location: 'Meireles, Fortaleza',
+        description: 'Chuveiro queimou e precisa de troca.', status: 'Pending'
+      });
+      expect(pedido.scope).toMatchObject({ urgencia: 'Alta' });
+      expect(pedido.updatedAt).toEqual(expect.any(String));
+      expect(pedido.photos.map((f: { url: string }) => f.url)).toEqual(['https://exemplo.com/nova.jpg']);
+      expect(pedido.cancellationReason).toBeUndefined();
+
+      // Sem fotos no corpo, as fotos anteriores são removidas.
+      const semFotos = await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, { ...corpo, fotos: [] });
+      expect(semFotos.json().photos).toEqual([]);
+    });
+
+    it('recusa a edição quando o pedido não está aberto ou já tem proposta aceita', async () => {
+      for (const n of [4, 5, 6]) {
+        const resposta = await chamar('PATCH', `/api/v1/orders/${ped(n)}`, e.dono, formulario);
+        expect(resposta.statusCode).toBe(409);
+      }
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(4)}`, e.dono, formulario)).json().detail).toContain('proposta já foi aceita');
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(5)}`, e.dono, formulario)).json().detail).toContain('em andamento');
+      const intacto = await corpoDe(chamar('GET', `/api/v1/orders/${ped(4)}`, e.dono));
+      expect(intacto.title).toBe('Proposta aceita');
+    });
+
+    it('cancela com motivo, libera as propostas pendentes e mostra o pedido como Cancelled', async () => {
+      const antes = (await corpoDe(chamar('GET', '/api/v1/home/summary', e.dono))).orders;
+
+      expect((await app.inject({ method: 'POST', url: `/api/v1/orders/${ped(2)}/cancel`, payload: {} })).statusCode).toBe(401);
+      expect((await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.outro, {})).statusCode).toBe(404);
+      expect((await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.dono, { reason: 'x'.repeat(501) })).statusCode).toBe(400);
+
+      const resposta = await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.dono, { reason: '  Resolvi por conta própria  ' });
+      expect(resposta.statusCode).toBe(200);
+      const pedido = resposta.json();
+      expect(pedido).toMatchObject({ status: 'Cancelled', cancellationReason: 'Resolvi por conta própria' });
+      expect(pedido.proposals.map((p: { status: string }) => p.status)).toEqual(['NotChosen']);
+      expect(pedido.updatedAt).toEqual(expect.any(String));
+
+      const depois = (await corpoDe(chamar('GET', '/api/v1/home/summary', e.dono))).orders;
+      expect(depois.cancelled).toBe(antes.cancelled + 1);
+      expect(depois.pending).toBe(antes.pending - 1);
+
+      const repetido = await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.dono, {});
+      expect(repetido.statusCode).toBe(409);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(2)}`, e.dono, formulario)).statusCode).toBe(409);
+    });
+
+    it('cancela sem corpo nem motivo e recusa quando há proposta aceita ou serviço em andamento', async () => {
+      const semCorpo = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${ped(3)}/cancel`,
+        headers: { authorization: `Bearer ${await token(e.dono)}` }
+      });
+      expect(semCorpo.statusCode).toBe(200);
+      expect(semCorpo.json()).toMatchObject({ status: 'Cancelled' });
+      expect(semCorpo.json().cancellationReason).toBeUndefined();
+
+      expect((await chamar('POST', `/api/v1/orders/${ped(4)}/cancel`, e.dono, {})).statusCode).toBe(409);
+      expect((await chamar('POST', `/api/v1/orders/${ped(5)}/cancel`, e.dono, {})).statusCode).toBe(409);
+      expect((await corpoDe(chamar('GET', `/api/v1/orders/${ped(4)}`, e.dono))).status).toBe('Pending');
+      expect((await corpoDe(chamar('GET', `/api/v1/orders/${ped(5)}`, e.dono))).status).toBe('InProgress');
+    });
+  });
+
   describe('avaliação pós-serviço (#92)', () => {
     const outroAvaliador = randomUUID();
     beforeAll(async () => {

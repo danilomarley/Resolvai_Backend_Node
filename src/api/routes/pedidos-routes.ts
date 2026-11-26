@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
+  cancelarPedidoRequestSchema,
   criarPedidoRequestSchema,
+  editarPedidoRequestSchema,
   listarPedidosQuerySchema,
   paginaPedidosResponseSchema,
   pedidoIdParamsSchema,
@@ -130,6 +132,46 @@ export function pedidosRoutes(
         if (!id) return reply;
         semCache(reply);
         return pedidoService.getById(request.usuario, id);
+      }
+    });
+
+    rotas.patch('/api/v1/orders/:id', {
+      schema: {
+        tags: ['Pedidos'],
+        summary: 'Edita um pedido do usuário autenticado (Resolvai_Cliente#85).',
+        description:
+          'Recebe o formulário completo, com as mesmas validações da criação: o pedido passa a ter exatamente os campos e as fotos enviados. ' +
+          'Só é permitido enquanto o pedido está aberto e nenhuma proposta foi aceita (409 caso contrário). ' +
+          'Retorna 404 quando o pedido não existe ou pertence a outro usuário.',
+        params: pedidoIdParamsSchema,
+        body: editarPedidoRequestSchema,
+        response: { 200: pedidoResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const id = guidDaRota(request, reply);
+        if (!id) return reply;
+        semCache(reply);
+        return pedidoService.editar(request.usuario, id, request.body);
+      }
+    });
+
+    rotas.post('/api/v1/orders/:id/cancel', {
+      schema: {
+        tags: ['Pedidos'],
+        summary: 'Cancela um pedido do usuário autenticado (Resolvai_Cliente#85).',
+        description:
+          'O corpo é opcional e aceita reason (até 500 caracteres). As propostas pendentes passam para NotChosen. ' +
+          'Só é permitido enquanto o pedido está aberto e nenhuma proposta foi aceita (409 caso contrário). ' +
+          'Retorna 404 quando o pedido não existe ou pertence a outro usuário.',
+        params: pedidoIdParamsSchema,
+        body: cancelarPedidoRequestSchema,
+        response: { 200: pedidoResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const id = guidDaRota(request, reply);
+        if (!id) return reply;
+        semCache(reply);
+        return pedidoService.cancelar(request.usuario, id, request.body);
       }
     });
   };
