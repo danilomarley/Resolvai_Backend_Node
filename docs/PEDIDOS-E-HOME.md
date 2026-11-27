@@ -22,7 +22,7 @@ Os nomes seguem a API C# para facilitar a comparação. Os campos do JSON e os v
 | Método | Rota | Resposta | Issue |
 | --- | --- | --- | --- |
 | POST | `/api/v1/orders` | Cria um pedido para o cliente autenticado | Resolvai_Cliente#51 |
-| GET | `/api/v1/orders?status=&page=1&pageSize=10` | Lista paginada dos pedidos do usuário (Seus Pedidos) | Resolvai_Cliente#49 |
+| GET | `/api/v1/orders?status=&stage=&page=1&pageSize=10` | Lista paginada dos pedidos do usuário (Seus Pedidos) | Resolvai_Cliente#49 |
 | GET | `/api/v1/orders/{id}` | Detalhe de um pedido com escopo, fotos e propostas | Resolvai_Cliente#49 |
 | PATCH | `/api/v1/orders/{id}` | Edita um pedido aberto e sem proposta aceita | Resolvai_Cliente#85 |
 | POST | `/api/v1/orders/{id}/cancel` | Cancela um pedido aberto e sem proposta aceita, com motivo opcional | Resolvai_Cliente#85 |
@@ -75,6 +75,7 @@ Parâmetros de query, todos opcionais:
 | Parâmetro | Padrão | Regra |
 | --- | --- | --- |
 | `status` | todos | `Pending`, `InProgress`, `Completed` ou `Cancelled` |
+| `stage` | todos | `Open` (aberto sem proposta aceita), `AwaitingSignatures` ou `AwaitingPayment`. Vale junto com `status` e conta só os pedidos do filtro na paginação |
 | `page` | 1 | inteiro ≥ 1 |
 | `pageSize` | 10 | inteiro entre 1 e 50 |
 
