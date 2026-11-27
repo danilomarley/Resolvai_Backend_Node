@@ -219,7 +219,7 @@ export class PagamentoService {
 
   private exigirGateway(): IGatewayPagamento {
     if (!this.gateway) {
-      throw new ServicoIndisponivelException('O pagamento está indisponível: a AbacatePay não foi configurada.');
+      throw new ServicoIndisponivelException('O pagamento está indisponível no momento. Tente novamente em instantes.');
     }
 
     return this.gateway;

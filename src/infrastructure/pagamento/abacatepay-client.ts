@@ -50,7 +50,7 @@ export class AbacatePayClient implements IGatewayPagamento {
     });
 
     if (!pix.id || !pix.brCode) {
-      throw new ServicoIndisponivelException('A AbacatePay não devolveu o código Pix.');
+      throw new ServicoIndisponivelException('O pagamento está indisponível no momento. Tente novamente em instantes.');
     }
 
     return { id: pix.id, status: pix.status, brCode: pix.brCode, qrCodeBase64: pix.brCodeBase64 ?? null, expiraEm: pix.expiresAt ? new Date(pix.expiresAt) : null };
@@ -78,13 +78,13 @@ export class AbacatePayClient implements IGatewayPagamento {
         signal: AbortSignal.timeout(this.options.timeoutMs ?? 15000)
       });
     } catch (erro) {
-      throw new ServicoIndisponivelException('Não foi possível falar com a AbacatePay. Tente novamente em instantes.', { cause: erro });
+      throw new ServicoIndisponivelException('O pagamento está indisponível no momento. Tente novamente em instantes.', { cause: erro });
     }
 
     const envelope = (await resposta.json().catch(() => null)) as Envelope<T> | null;
     if (!resposta.ok || !envelope?.success || !envelope.data) {
       const motivo = typeof envelope?.error === 'string' ? envelope.error : envelope?.error?.message;
-      throw new ServicoIndisponivelException('A AbacatePay recusou a operação de pagamento.', {
+      throw new ServicoIndisponivelException('O pagamento está indisponível no momento. Tente novamente em instantes.', {
         cause: new Error(`AbacatePay ${resposta.status} ${caminho.split('?')[0]}: ${motivo ?? 'sem detalhe'}`)
       });
     }
