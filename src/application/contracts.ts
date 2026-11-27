@@ -1,7 +1,7 @@
 import type { Contato } from '../domain/contato.js';
 import type { Email } from '../domain/email.js';
 import type { Endereco } from '../domain/endereco.js';
-import type { StatusPedido, UserRole } from '../domain/enums.js';
+import type { FiltroEstagio, StatusPedido, UserRole } from '../domain/enums.js';
 import type { User } from '../domain/user.js';
 import type { Fornecedor } from '../domain/fornecedor.js';
 import type { EspecialidadeResponse, FornecedorResponse } from './dtos/fornecedores.js';
@@ -50,14 +50,26 @@ export interface IContatoRepository {
 
 // Consultas de leitura retornam projeções, sem carregar agregados desnecessários.
 export interface IPedidoQueries {
-  list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number): Promise<PaginaResponse<PedidoResumoResponse>>;
+  list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number, stage?: FiltroEstagio): Promise<PaginaResponse<PedidoResumoResponse>>;
   getById(id: string, userId: string): Promise<PedidoResponse | null>;
   getSummary(userId: string): Promise<ResumoHomeResponse>;
 }
 
 export interface IPedidoRepository {
   add(id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]): Promise<void>;
+  /** Troca escopo e fotos de um pedido aberto, sem proposta aceita (#85). */
+  update(id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]): Promise<ResultadoAlteracaoPedido>;
+  /** Cancela um pedido aberto, sem proposta aceita, e libera as propostas pendentes (#85). */
+  cancel(id: string, idCliente: string, motivo: string | null): Promise<ResultadoAlteracaoPedido>;
+  /** O contratante confirma que o servico foi feito: pedido em andamento (pago) vira concluido (#92). */
+  complete(id: string, idCliente: string): Promise<ResultadoAlteracaoPedido>;
 }
+
+/**
+ * notFound: o pedido não existe ou é de outro cliente. closed: já foi cancelado, concluído ou está em andamento.
+ * proposalChosen: o cliente já aceitou uma proposta. Na conclusão, closed é qualquer pedido que não está em andamento.
+ */
+export type ResultadoAlteracaoPedido = 'ok' | 'notFound' | 'closed' | 'proposalChosen';
 
 export interface IOportunidadeQueries {
   list(providerId: string, query: ListarOportunidadesQuery): Promise<OportunidadesResponse>;

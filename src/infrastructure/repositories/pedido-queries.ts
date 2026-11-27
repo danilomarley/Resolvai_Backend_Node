@@ -7,7 +7,7 @@ import type {
   PedidoResumoResponse,
   PropostaResponse
 } from '../../application/dtos/pedidos.js';
-import { StatusPedido } from '../../domain/enums.js';
+import { StatusPedido, type EstagioPedido, type FiltroEstagio } from '../../domain/enums.js';
 import type { Database, Sql } from '../database.js';
 import { propostaColumns, propostaFrom, toProposta, type PropostaRow } from './proposta-sql.js';
 
@@ -21,9 +21,17 @@ const statusPedidoColumn = `
        when 'cancelado' then 'Cancelled'
   end`;
 
+// Estagio do pedido aberto com proposta aceita (nulo nos demais): contrato assinado pelas duas partes = pagamento.
+const estagioColumn = `
+  case when p.status = 'aberto'
+        and exists (select 1 from public.propostas pr where pr.id_pedido = p.id and pr.status = 'escolhida')
+       then case when exists (select 1 from public.contratos c where c.id_pedido = p.id and c.status = 'assinado')
+                 then 'AwaitingPayment' else 'AwaitingSignatures' end
+  end`;
+
 const categoriaColumn = `nullif(btrim(p.escopo ->> 'categoria'), '')`;
 
-const tituloColumn = `coalesce(nullif(btrim(p.escopo ->> 'titulo'), ''), ${categoriaColumn}, 'Pedido')`;
+export const tituloColumn = `coalesce(nullif(btrim(p.escopo ->> 'titulo'), ''), ${categoriaColumn}, 'Pedido')`;
 
 const resumoColumns = `
   select p.id as "id",
@@ -35,7 +43,8 @@ const resumoColumns = `
          p.data_atualizacao as "updatedAt",
          (select count(*) from public.propostas pr where pr.id_pedido = p.id) as "proposalsCount",
          (select max(pr.valor) from public.propostas pr
-           where pr.id_pedido = p.id and pr.status = 'escolhida') as "chosenProposalValue"
+           where pr.id_pedido = p.id and pr.status = 'escolhida') as "chosenProposalValue",
+         ${estagioColumn} as "stage"
     from public.pedidos p`;
 
 const ordenacaoRecentes = 'order by p.data_criacao desc, p.id desc';
@@ -50,6 +59,7 @@ interface PedidoResumoRow {
   updatedAt: Date | null;
   proposalsCount: number;
   chosenProposalValue: number | null;
+  stage: EstagioPedido | null;
 }
 
 interface PedidoRow {
@@ -62,6 +72,8 @@ interface PedidoRow {
   createdAt: Date;
   updatedAt: Date | null;
   scope: unknown;
+  cancellationReason: string | null;
+  stage: EstagioPedido | null;
 }
 
 interface FotoRow {
@@ -77,9 +89,22 @@ interface FotoRow {
 export class PedidoQueries implements IPedidoQueries {
   constructor(private readonly database: Database) {}
 
-  list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number): Promise<PaginaResponse<PedidoResumoResponse>> {
-    const filtro = status === undefined ? '' : ' and p.status = $2';
-    const params: unknown[] = status === undefined ? [userId] : [userId, toDbStatus(status)];
+  list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number, stage?: FiltroEstagio): Promise<PaginaResponse<PedidoResumoResponse>> {
+    const params: unknown[] = [userId];
+    let filtro = '';
+    if (status !== undefined) {
+      params.push(toDbStatus(status));
+      filtro += ` and p.status = $${params.length}`;
+    }
+
+    // O estágio vem do contrato (mesma regra do campo stage); Open é o aberto sem proposta aceita.
+    if (stage === 'Open') {
+      filtro += ` and p.status = 'aberto' and (${estagioColumn}) is null`;
+    } else if (stage !== undefined) {
+      params.push(stage);
+      filtro += ` and (${estagioColumn}) = $${params.length}`;
+    }
+
     const limite = params.length + 1;
 
     return this.readSnapshot(async sql => {
@@ -111,7 +136,9 @@ export class PedidoQueries implements IPedidoQueries {
                 ${statusPedidoColumn} as "status",
                 p.data_criacao as "createdAt",
                 p.data_atualizacao as "updatedAt",
-                p.escopo as "scope"
+                p.escopo as "scope",
+                p.motivo_cancelamento as "cancellationReason",
+                ${estagioColumn} as "stage"
            from public.pedidos p
           where p.id = $1 and p.id_cliente = $2;`,
         [id, userId]
@@ -220,7 +247,8 @@ function toResumo(row: PedidoResumoRow): PedidoResumoResponse {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt?.toISOString(),
     proposalsCount: row.proposalsCount,
-    chosenProposalValue: opcional(row.chosenProposalValue)
+    chosenProposalValue: opcional(row.chosenProposalValue),
+    stage: opcional(row.stage)
   };
 }
 
@@ -235,6 +263,8 @@ function toPedido(row: PedidoRow, photos: FotoPedidoResponse[], proposals: Propo
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt?.toISOString(),
     scope: opcional(row.scope),
+    cancellationReason: opcional(row.cancellationReason),
+    stage: opcional(row.stage),
     photos,
     proposals
   };

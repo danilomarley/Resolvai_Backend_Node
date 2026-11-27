@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import {
+  cancelarPedidoRequestSchema,
   criarPedidoRequestSchema,
+  editarPedidoRequestSchema,
   listarPedidosQuerySchema,
   paginaPedidosResponseSchema,
   pedidoIdParamsSchema,
@@ -90,7 +92,7 @@ export function pedidosRoutes(
         tags: ['Pedidos'],
         summary: 'Lista paginada dos pedidos do usuário autenticado (Seus Pedidos).',
         description:
-          'Ordenada por data de criação decrescente. Filtro opcional por status. page a partir de 1 e pageSize entre 1 e 50 (padrão 10).',
+          'Ordenada por data de criação decrescente. Filtros opcionais por status e por stage (Open, AwaitingSignatures, AwaitingPayment). page a partir de 1 e pageSize entre 1 e 50 (padrão 10).',
         querystring: listarPedidosQuerySchema,
         response: { 200: paginaPedidosResponseSchema }
       },
@@ -130,6 +132,64 @@ export function pedidosRoutes(
         if (!id) return reply;
         semCache(reply);
         return pedidoService.getById(request.usuario, id);
+      }
+    });
+
+    rotas.patch('/api/v1/orders/:id', {
+      schema: {
+        tags: ['Pedidos'],
+        summary: 'Edita um pedido do usuário autenticado (Resolvai_Cliente#85).',
+        description:
+          'Recebe o formulário completo, com as mesmas validações da criação: o pedido passa a ter exatamente os campos e as fotos enviados. ' +
+          'Só é permitido enquanto o pedido está aberto e nenhuma proposta foi aceita (409 caso contrário). ' +
+          'Retorna 404 quando o pedido não existe ou pertence a outro usuário.',
+        params: pedidoIdParamsSchema,
+        body: editarPedidoRequestSchema,
+        response: { 200: pedidoResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const id = guidDaRota(request, reply);
+        if (!id) return reply;
+        semCache(reply);
+        return pedidoService.editar(request.usuario, id, request.body);
+      }
+    });
+
+    rotas.post('/api/v1/orders/:id/cancel', {
+      schema: {
+        tags: ['Pedidos'],
+        summary: 'Cancela um pedido do usuário autenticado (Resolvai_Cliente#85).',
+        description:
+          'O corpo é opcional e aceita reason (até 500 caracteres). As propostas pendentes passam para NotChosen. ' +
+          'Só é permitido enquanto o pedido está aberto e nenhuma proposta foi aceita (409 caso contrário). ' +
+          'Retorna 404 quando o pedido não existe ou pertence a outro usuário.',
+        params: pedidoIdParamsSchema,
+        body: cancelarPedidoRequestSchema,
+        response: { 200: pedidoResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const id = guidDaRota(request, reply);
+        if (!id) return reply;
+        semCache(reply);
+        return pedidoService.cancelar(request.usuario, id, request.body);
+      }
+    });
+
+    rotas.post('/api/v1/orders/:id/complete', {
+      schema: {
+        tags: ['Pedidos'],
+        summary: 'Confirma a conclusão do serviço (Resolvai_Cliente#92).',
+        description:
+          'O contratante confirma que o serviço foi feito. Só vale para pedido InProgress, isto é, com o pagamento confirmado (409 caso contrário). ' +
+          'Depois disso o pedido fica Completed e pode ser avaliado. Retorna 404 quando o pedido não existe ou pertence a outro usuário.',
+        params: pedidoIdParamsSchema,
+        response: { 200: pedidoResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const id = guidDaRota(request, reply);
+        if (!id) return reply;
+        semCache(reply);
+        return pedidoService.concluir(request.usuario, id);
       }
     });
   };

@@ -8,6 +8,11 @@ import { FornecedorRepository } from './infrastructure/repositories/fornecedor-r
 import { FotoPedidoService } from './application/services/foto-pedido-service.js';
 import { PedidoService } from './application/services/pedido-service.js';
 import { PropostaService } from './application/services/proposta-service.js';
+import { ContratoService } from './application/services/contrato-service.js';
+import { ContratoRepository } from './infrastructure/repositories/contrato-repository.js';
+import { PagamentoService } from './application/services/pagamento-service.js';
+import { PagamentoRepository } from './infrastructure/repositories/pagamento-repository.js';
+import { AbacatePayClient } from './infrastructure/pagamento/abacatepay-client.js';
 import { PrestadorService } from './application/services/prestador-service.js';
 import { PropostaPrestadorService } from './application/services/proposta-prestador-service.js';
 import { UserService } from './application/services/user-service.js';
@@ -53,6 +58,12 @@ export function criarDependencias(config: AppConfig, database: Database = create
     userService: new UserService(userRepository, new EnderecoRepository(database), new ContatoRepository(database), supabaseAuthClient),
     pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), userRepository),
     propostaService: new PropostaService(new PropostaRepository(database), new PedidoQueries(database)),
+    contratoService: new ContratoService(new ContratoRepository(database)),
+    pagamentoService: new PagamentoService(
+      new PagamentoRepository(database),
+      config.abacatepay ? new AbacatePayClient({ apiKey: config.abacatepay.apiKey, baseUrl: config.abacatepay.baseUrl }) : undefined,
+      config.abacatepay?.webhookSecret
+    ),
     prestadorService: new PrestadorService(new PrestadorRepository(database), userRepository, fornecedores),
     propostaPrestadorService: new PropostaPrestadorService(new PropostaPrestadorRepository(database), fornecedorService, storage),
     fotoPedidoService: new FotoPedidoService(

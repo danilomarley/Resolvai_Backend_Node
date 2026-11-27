@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { SignJWT } from 'jose';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -12,11 +12,14 @@ import { AvaliacaoService } from '../src/application/services/avaliacao-service.
 import { PropostaFornecedorService } from '../src/application/services/proposta-fornecedor-service.js';
 import type { IPropostaFornecedorRepository } from '../src/application/dtos/propostas-fornecedor.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
+import { ContratoService } from '../src/application/services/contrato-service.js';
+import { PagamentoService } from '../src/application/services/pagamento-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
 import { PrestadorService, type IPrestadorRepository } from '../src/application/services/prestador-service.js';
 import { PropostaPrestadorService, type IPropostaPrestadorRepository } from '../src/application/services/proposta-prestador-service.js';
 import { UserService } from '../src/application/services/user-service.js';
+import { chavePublicaAbacatePay } from '../src/domain/pagamento.js';
 import { Email } from '../src/domain/email.js';
 import { UserRole } from '../src/domain/enums.js';
 import { User } from '../src/domain/user.js';
@@ -27,6 +30,9 @@ import {
   FakeEspecialidades,
   FakeFornecedores,
   FakeEnderecos,
+  FakeContratoRepository,
+  FakePagamentoRepository,
+  FakeGatewayPagamento,
   FakePedidoRepository,
   FakePropostaRepository,
   FakeQueries,
@@ -56,6 +62,9 @@ describe('API HTTP', () => {
   let queries: FakeQueries;
   let propostas: FakePropostaRepository;
   let supabase: FakeSupabase;
+  let pagamentos: FakePagamentoRepository;
+  let gateway: FakeGatewayPagamento;
+  const segredoWebhook = 'segredo-do-webhook-de-teste-com-mais-de-32-caracteres';
   const clienteId = randomUUID();
   const adminId = randomUUID();
 
@@ -63,6 +72,8 @@ describe('API HTTP', () => {
     users = new FakeUsers();
     queries = new FakeQueries();
     propostas = new FakePropostaRepository();
+    pagamentos = new FakePagamentoRepository();
+    gateway = new FakeGatewayPagamento();
     supabase = new FakeSupabase();
     const fornecedores = new FakeFornecedores();
     const especialidades = new FakeEspecialidades();
@@ -77,6 +88,8 @@ describe('API HTTP', () => {
         especialidadeQueries: especialidades,
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
+        contratoService: new ContratoService(new FakeContratoRepository()),
+        pagamentoService: new PagamentoService(pagamentos, gateway, segredoWebhook),
         propostaService: new PropostaService(propostas, queries),
         prestadorService: new PrestadorService({ async listCategorias() { return []; } } as unknown as IPrestadorRepository, users),
         propostaPrestadorService: new PropostaPrestadorService({} as unknown as IPropostaPrestadorRepository, fornecedorService),
@@ -215,6 +228,48 @@ describe('API HTTP', () => {
     });
   });
 
+  describe('webhook de pagamento (#96)', () => {
+    const corpo = JSON.stringify({ event: 'transparent.completed', data: { transparent: { id: 'pix_char_http', status: 'PAID' } } });
+    const assinatura = (texto: string) => createHmac('sha256', chavePublicaAbacatePay).update(texto).digest('base64');
+    const enviar = (texto: string, headers: Record<string, string>, query = '') =>
+      app.inject({ method: 'POST', url: `/api/v1/webhooks/abacatepay${query}`, headers: { 'content-type': 'application/json', ...headers }, payload: texto });
+
+    it('é público: aceita segredo e assinatura sem token de usuário e confirma o pagamento', async () => {
+      const resposta = await enviar(corpo, { 'x-webhook-secret': segredoWebhook, 'x-webhook-signature': assinatura(corpo) });
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toEqual({ ok: true });
+      expect(pagamentos.confirmados).toContain('pix_char_http');
+    });
+
+    it('aceita o segredo pela query string, como a AbacatePay envia', async () => {
+      pagamentos.confirmados.length = 0;
+      const resposta = await enviar(corpo, { 'x-webhook-signature': assinatura(corpo) }, `?webhookSecret=${segredoWebhook}`);
+      expect(resposta.statusCode).toBe(200);
+      expect(pagamentos.confirmados).toEqual(['pix_char_http']);
+    });
+
+    it('confere a assinatura no corpo bruto: o mesmo JSON com espaços a mais é recusado', async () => {
+      pagamentos.confirmados.length = 0;
+      const reformatado = JSON.stringify(JSON.parse(corpo), null, 2);
+      const resposta = await enviar(reformatado, { 'x-webhook-secret': segredoWebhook, 'x-webhook-signature': assinatura(corpo) });
+      expect(resposta.statusCode).toBe(401);
+      expect(pagamentos.confirmados).toHaveLength(0);
+    });
+
+    it('recusa segredo errado e ausência de assinatura com 401', async () => {
+      expect((await enviar(corpo, { 'x-webhook-secret': 'errado', 'x-webhook-signature': assinatura(corpo) })).statusCode).toBe(401);
+      expect((await enviar(corpo, { 'x-webhook-secret': segredoWebhook })).statusCode).toBe(401);
+      expect((await enviar(corpo, {})).statusCode).toBe(401);
+    });
+
+    it('as rotas do contratante exigem login', async () => {
+      const id = randomUUID();
+      for (const [method, url] of [['POST', `/api/v1/orders/${id}/payment`], ['GET', `/api/v1/orders/${id}/payment`], ['POST', `/api/v1/orders/${id}/payment/simulate`]] as const) {
+        expect((await app.inject({ method, url })).statusCode).toBe(401);
+      }
+    });
+  });
+
   describe('contrato', () => {
     it('omite campos nulos e mantém nomes em camelCase', async () => {
       const resposta = await get('/api/v1/users/me', adminId);
@@ -264,6 +319,21 @@ describe('API HTTP', () => {
       const corpo = resposta.json();
       expect(corpo.title).toBe('One or more validation errors occurred.');
       expect(Object.keys(corpo.errors).sort()).toEqual(['Page', 'PageSize', 'Status']);
+    });
+
+    it('o filtro stage aceita qualquer caixa, chega à consulta e valor inválido responde 400', async () => {
+      const resposta = await get('/api/v1/orders?status=pending&stage=awaitingpayment', clienteId);
+      expect(resposta.statusCode).toBe(200);
+      expect(queries.lastStatus).toBe('Pending');
+      expect(queries.lastStage).toBe('AwaitingPayment');
+      expect((await get('/api/v1/orders?stage=OPEN', clienteId)).statusCode).toBe(200);
+      expect(queries.lastStage).toBe('Open');
+      await get('/api/v1/orders', clienteId);
+      expect(queries.lastStage).toBeUndefined();
+
+      const invalido = await get('/api/v1/orders?stage=Foo', clienteId);
+      expect(invalido.statusCode).toBe(400);
+      expect(Object.keys(invalido.json().errors)).toEqual(['Stage']);
     });
 
     it('validação de corpo usa caminhos aninhados', async () => {

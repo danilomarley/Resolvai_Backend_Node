@@ -21,6 +21,10 @@ const envSchema = z.object({
   // Opcional: sem chave, o chat de criação de pedido (#69) responde 503 e o resto da API funciona.
   ANTHROPIC_API_KEY: z.string().trim().optional(),
   ANTHROPIC_MODEL: z.string().trim().min(1).default('claude-opus-5-5'),
+  // Opcionais: sem a chave, o pagamento (#96) responde 503 e o resto da API funciona.
+  ABACATEPAY_API_KEY: z.string().trim().optional(),
+  ABACATEPAY_WEBHOOK_SECRET: z.string().trim().optional(),
+  ABACATEPAY_API_URL: z.url().default('https://api.abacatepay.com/v2'),
   CORS_ALLOWED_ORIGINS: z
     .string()
     .default('')
@@ -57,6 +61,13 @@ export interface AppConfig {
     apiKey: string;
     model: string;
   };
+  /** Ausente quando ABACATEPAY_API_KEY nao foi configurada. */
+  abacatepay?: {
+    apiKey: string;
+    /** Segredo do webhook; sem ele o webhook e recusado. */
+    webhookSecret?: string;
+    baseUrl: string;
+  };
   corsAllowedOrigins: string[];
 }
 
@@ -92,6 +103,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       storageBucket: e.SUPABASE_STORAGE_BUCKET
     },
     claude: e.ANTHROPIC_API_KEY ? { apiKey: e.ANTHROPIC_API_KEY, model: e.ANTHROPIC_MODEL } : undefined,
+    abacatepay: e.ABACATEPAY_API_KEY
+      ? { apiKey: e.ABACATEPAY_API_KEY, webhookSecret: e.ABACATEPAY_WEBHOOK_SECRET || undefined, baseUrl: e.ABACATEPAY_API_URL.replace(/\/+$/, '') }
+      : undefined,
     corsAllowedOrigins: e.CORS_ALLOWED_ORIGINS
   };
 }

@@ -35,5 +35,6 @@ Os scripts `013_create_fornecedores.sql`, `014_create_especialidades_fornecedor.
 ## Observações
 
 - `ANTHROPIC_API_KEY` é opcional. Sem ela, só o chat de criação de pedido responde 503.
+- `ABACATEPAY_API_KEY` e `ABACATEPAY_WEBHOOK_SECRET` são opcionais (pagamento por Pix, veja [PAGAMENTOS.md](PAGAMENTOS.md)). Sem elas, só o pagamento responde 503. Aplique `db/scripts/020_create_pagamentos.sql` antes do deploy.
 - O limite de tentativas (recuperação de senha, chat e fotos) fica em memória e vale por instância, o que basta para uma instância no plano Free.
 - Para não hibernar, é preciso um plano pago do Render.

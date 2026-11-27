@@ -22,11 +22,15 @@ Os nomes seguem a API C# para facilitar a comparação. Os campos do JSON e os v
 | Método | Rota | Resposta | Issue |
 | --- | --- | --- | --- |
 | POST | `/api/v1/orders` | Cria um pedido para o cliente autenticado | Resolvai_Cliente#51 |
-| GET | `/api/v1/orders?status=&page=1&pageSize=10` | Lista paginada dos pedidos do usuário (Seus Pedidos) | Resolvai_Cliente#49 |
+| GET | `/api/v1/orders?status=&stage=&page=1&pageSize=10` | Lista paginada dos pedidos do usuário (Seus Pedidos) | Resolvai_Cliente#49 |
 | GET | `/api/v1/orders/{id}` | Detalhe de um pedido com escopo, fotos e propostas | Resolvai_Cliente#49 |
+| PATCH | `/api/v1/orders/{id}` | Edita um pedido aberto e sem proposta aceita | Resolvai_Cliente#85 |
+| POST | `/api/v1/orders/{id}/cancel` | Cancela um pedido aberto e sem proposta aceita, com motivo opcional | Resolvai_Cliente#85 |
+| POST | `/api/v1/orders/{id}/complete` | Confirma a conclusão de um pedido em andamento (pago) | Resolvai_Cliente#92 |
 | GET | `/api/v1/home/summary` | Dados dos cards e os 5 pedidos mais recentes | Resolvai_Cliente#50 |
 | GET | `/api/v1/orders/{id}/proposals?sort=&direction=` | Propostas recebidas pelo pedido, ordenáveis | Resolvai_Cliente#83 |
 | GET | `/api/v1/orders/{id}/proposals/{proposalId}` | Detalhe da proposta com o resumo do prestador | Resolvai_Cliente#83 |
+| GET | `/api/v1/proposals/unviewed?limit=` | Propostas novas do cliente, para os alertas da navbar | Resolvai_Cliente#90 |
 
 Todas exigem `Authorization: Bearer <accessToken>` obtido no login. Todos os papéis, inclusive Admin, consultam apenas os pedidos em que são o cliente (`pedidos.id_cliente`). O identificador do usuário vem do token, nunca de parâmetros enviados pelo cliente. Usuários inativos ou tokens inválidos recebem 401. As respostas HTTP não devem ser armazenadas em cache (`Cache-Control: no-store`). Campos nulos são omitidos, conforme a configuração geral da API.
 
@@ -71,6 +75,7 @@ Parâmetros de query, todos opcionais:
 | Parâmetro | Padrão | Regra |
 | --- | --- | --- |
 | `status` | todos | `Pending`, `InProgress`, `Completed` ou `Cancelled` |
+| `stage` | todos | `Open` (aberto sem proposta aceita), `AwaitingSignatures` ou `AwaitingPayment`. Vale junto com `status` e conta só os pedidos do filtro na paginação |
 | `page` | 1 | inteiro ≥ 1 |
 | `pageSize` | 10 | inteiro entre 1 e 50 |
 
@@ -99,6 +104,8 @@ Valores inválidos retornam 400 (`ValidationProblemDetails`). Uma página além 
 ```
 
 `location` vem de `escopo.localizacao` e é omitido quando não foi informado. `proposalsCount` conta todas as propostas recebidas pelo pedido. `chosenProposalValue` é o valor da proposta com status `escolhida` e é omitido enquanto nenhuma foi escolhida.
+
+`stage` (listagem e detalhe) diz onde um pedido `Pending` com proposta aceita está: `AwaitingSignatures` até as duas partes assinarem o contrato e `AwaitingPayment` depois. Nos demais pedidos é omitido; depois do pagamento o próprio status é `InProgress`.
 
 ## POST /api/v1/orders
 
@@ -149,10 +156,34 @@ Retorna os campos da listagem, exceto os dois de propostas, e acrescenta:
 | `description` | `escopo.descricao` (sempre presente, `""` se ausente) |
 | `location` | `escopo.localizacao` |
 | `scope` | `escopo` completo, como JSON |
+| `cancellationReason` | `pedidos.motivo_cancelamento`, só em pedidos cancelados com motivo informado |
+| `stage` | `AwaitingSignatures` ou `AwaitingPayment`, calculado a partir de `contratos`; só em pedido `Pending` com proposta aceita |
 | `photos[]` | `fotos_pedido`: `id`, `url` (valor da coluna `foto`, URL ou caminho no storage), `description` |
 | `proposals[]` | `propostas` + `users` + `avaliacoes`: `id`, `providerId`, `providerName`, `status`, `value`, `deadline`, `deadlineDays`, `description`, `warranty`, `createdAt`, `providerRating` (ver abaixo) |
 
 As propostas vêm com a escolhida primeiro, depois por valor crescente. Consultar o detalhe do pedido não marca propostas como visualizadas (quem marca é o detalhe da proposta, abaixo). Pedido inexistente ou de outro usuário retorna 404, assim como um identificador que não seja UUID.
+
+## Editar e cancelar pedido (#85)
+
+Valem para o dono do pedido. Outro usuário, pedido inexistente ou identificador que não seja UUID retornam 404, como nas demais rotas de pedidos.
+
+### PATCH /api/v1/orders/{id}
+
+Corpo igual ao de `POST /api/v1/orders`, com as mesmas validações. O pedido passa a ter exatamente os campos e as fotos enviados (as fotos anteriores são substituídas), então o front envia o formulário completo. Devolve o detalhe atualizado, com `updatedAt` novo.
+
+### POST /api/v1/orders/{id}/cancel
+
+Corpo opcional: `{ "reason": "..." }`, até 500 caracteres, guardado em `pedidos.motivo_cancelamento` (script `018_add_motivo_cancelamento_pedidos.sql`). O pedido passa para `Cancelled` e as propostas ainda pendentes (`Sent` e `Viewed`) passam para `NotChosen`, de modo que os prestadores as vejam como não selecionadas. Devolve o detalhe atualizado.
+
+### Quando recusa (409)
+
+As duas rotas só funcionam enquanto o pedido está aberto (`Pending`) e nenhuma proposta foi aceita. Pedido cancelado, concluído ou em andamento, ou com proposta `Chosen`, retorna 409 com a mensagem em `detail`. A checagem e a gravação acontecem na mesma transação, com o pedido travado, então um aceite simultâneo não passa despercebido.
+
+## Conclusão do serviço (#92)
+
+### POST /api/v1/orders/{id}/complete
+
+Sem corpo. O contratante confirma que o serviço foi feito e o pedido passa de `InProgress` para `Completed`, o que libera a avaliação (`POST /api/v1/orders/{id}/review`). Só vale para pedido em andamento, isto é, com o pagamento confirmado ([PAGAMENTOS.md](PAGAMENTOS.md)): qualquer outro status retorna 409. Pedido inexistente ou de outro usuário retorna 404. Devolve o detalhe atualizado. O repasse do valor ao prestador não faz parte desta rota.
 
 ## Propostas do pedido (#83)
 
@@ -200,6 +231,20 @@ Devolve os campos da proposta e `providerProfile`:
 `memberSince` vem de `users.created_at`. `completedServices` conta os pedidos concluídos em que o prestador foi o escolhido.
 
 **Efeito colateral:** abrir o detalhe de uma proposta `Sent` a marca como `Viewed` (`visualizada` no banco) e a resposta já traz o status novo. Isso alimenta `proposals.unviewed` da Home. A listagem e `GET /api/v1/orders/{id}` não marcam nada.
+
+### GET /api/v1/proposals/unviewed (#90)
+
+Alimenta o ícone de alertas da navbar. Devolve `{ total, items[] }` com as propostas **ainda não visualizadas** (`Sent`) dos pedidos **abertos** do cliente, as mais recentes primeiro. É o mesmo critério de `proposals.unviewed` da Home, então os dois números batem.
+
+| Campo | Origem |
+| --- | --- |
+| `total` | Contagem completa, independente do `limit` |
+| `items[].id` | Id da proposta |
+| `items[].orderId`, `orderTitle` | Pedido (título como nas demais listagens) |
+| `items[].providerName` | `users.name` do prestador |
+| `items[].value`, `createdAt` | Valor e data de envio |
+
+`limit` vai de 1 a 20 (padrão 10) e só corta a lista. Abrir o detalhe da proposta (`GET /orders/{id}/proposals/{proposalId}`) a marca como `Viewed` e ela sai daqui; a listagem não marca nada. Proposta de pedido cancelado, em andamento ou já com proposta aceita não conta.
 
 ## GET /api/v1/home/summary
 

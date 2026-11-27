@@ -35,6 +35,7 @@ Todas as variáveis estão em [.env.example](.env.example). A API valida tudo na
 | `CORS_ALLOWED_ORIGINS` | `Cors:AllowedOrigins`, separado por vírgula |
 | `SUPABASE_STORAGE_BUCKET` | Novo: bucket das fotos dos pedidos (padrão `pedidos`) |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Novo: chat de IA da criação de pedido; opcional |
+| `ABACATEPAY_API_KEY`, `ABACATEPAY_WEBHOOK_SECRET` | Novo: pagamento por Pix (AbacatePay v2); opcional, sem a chave o pagamento responde 503 |
 
 O repositório é público: **nunca versione o `.env`** (ele já está no `.gitignore`). Em produção, configure as variáveis no provedor de deploy.
 
@@ -97,12 +98,24 @@ tests/                 Vitest
 | PATCH | `/api/v1/users/{id}/status` | Admin |
 | GET | `/api/v1/orders` | autenticado |
 | POST | `/api/v1/orders` | autenticado (Cliente com cadastro finalizado) |
+| GET | `/api/v1/proposals/unviewed` | autenticado, propostas novas do cliente (#90) |
+| GET | `/api/v1/orders/{id}/contract` | autenticado, contrato do pedido com proposta aceita (#95) |
+| POST | `/api/v1/orders/{id}/contract/sign` | autenticado, contratante assina o contrato (#95) |
+| GET | `/api/v1/provider/proposals/{id}/contract` | Prestador da proposta escolhida (#95) |
+| POST | `/api/v1/provider/proposals/{id}/contract/sign` | Prestador assina o contrato (#95) |
+| POST | `/api/v1/orders/{id}/payment` | autenticado, gera o Pix do pedido com contrato assinado (#96) |
+| GET | `/api/v1/orders/{id}/payment` | autenticado, estado do pagamento (#96) |
+| POST | `/api/v1/orders/{id}/payment/simulate` | autenticado, simula o pagamento (só modo de teste) (#96) |
+| POST | `/api/v1/webhooks/abacatepay` | público, webhook da AbacatePay (segredo e assinatura) (#96) |
 | GET | `/api/v1/orders/{id}` | autenticado |
+| PATCH | `/api/v1/orders/{id}` | autenticado, dono do pedido aberto e sem proposta aceita (#85) |
+| POST | `/api/v1/orders/{id}/cancel` | autenticado, dono do pedido aberto e sem proposta aceita (#85) |
+| POST | `/api/v1/orders/{id}/complete` | autenticado, dono do pedido em andamento (pago) confirma a conclusão (#92) |
 | POST | `/api/v1/orders/photos` | autenticado, multipart (Cliente com cadastro finalizado, #67) |
 | POST | `/api/v1/orders/assistant` | autenticado (chat com IA, #69) |
 | GET | `/api/v1/home/summary` | autenticado |
 
-Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md). Exemplos de requisição em [requests.http](requests.http). O que mudou em relação à API C# está em [docs/MIGRACAO.md](docs/MIGRACAO.md). O deploy no Render está em [docs/DEPLOY.md](docs/DEPLOY.md).
+Detalhes de pedidos e da Home em [docs/PEDIDOS-E-HOME.md](docs/PEDIDOS-E-HOME.md). O contrato e a assinatura das duas partes estão em [docs/CONTRATOS.md](docs/CONTRATOS.md). O pagamento por Pix, o webhook e o teste em modo sandbox estão em [docs/PAGAMENTOS.md](docs/PAGAMENTOS.md). Exemplos de requisição em [requests.http](requests.http). O que mudou em relação à API C# está em [docs/MIGRACAO.md](docs/MIGRACAO.md). O deploy no Render está em [docs/DEPLOY.md](docs/DEPLOY.md).
 
 A recuperação por código preserva `check-email` e `reset-password`: o segundo recebe `{email, token, newPassword}` e valida o OTP de uso único no Supabase. O fluxo por link usa `forgot-password` com `{email, redirectTo}` e `change-password` com Bearer e `{newPassword}`. A alteração usa a sessão verificada do usuário. Veja [recuperação segura](docs/PASSWORD-RECOVERY.md).
 

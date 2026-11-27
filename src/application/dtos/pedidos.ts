@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { statusPedidos, statusPropostas } from '../../domain/enums.js';
+import { estagiosPedido, filtrosEstagio, statusPedidos, statusPropostas } from '../../domain/enums.js';
 import { paginaResponseSchema } from './common.js';
 import { dataIso, obrigatorio, tamanho, textoObrigatorio, textoOpcional, url } from './validacao.js';
 
@@ -50,6 +50,24 @@ export const listarPedidosQuerySchema = z.object({
       return status;
     })
     .describe('Pending, InProgress, Completed ou Cancelled. Sem valor, lista todos os status.'),
+  // Mesma regra do status: sem diferenciar maiúsculas, valor inválido é 400.
+  stage: z
+    .string()
+    .optional()
+    .transform((valor, ctx) => {
+      if (valor === undefined || valor === '') {
+        return undefined;
+      }
+
+      const estagio = filtrosEstagio.find(item => item.toLowerCase() === valor.trim().toLowerCase());
+      if (!estagio) {
+        ctx.addIssue({ code: 'custom', message: `O valor '${valor}' não é válido para stage.` });
+        return z.NEVER;
+      }
+
+      return estagio;
+    })
+    .describe('Open (aberto sem proposta aceita), AwaitingSignatures ou AwaitingPayment. Combina com status.'),
   page: inteiroDaQuery('page', 1, 2_147_483_647, 1).describe('Página a partir de 1 (padrão 1).'),
   pageSize: inteiroDaQuery('pageSize', 1, maxPageSize, 10).describe('Itens por página, entre 1 e 50 (padrão 10).')
 });
@@ -81,6 +99,21 @@ export const criarPedidoRequestSchema = z.object({
 export type CriarPedidoRequest = z.output<typeof criarPedidoRequestSchema>;
 
 /**
+ * Corpo de PATCH /api/v1/orders/{id} (#85): as mesmas regras da criação. O pedido passa a ter exatamente
+ * os campos e as fotos enviados, então o front manda o formulário completo.
+ */
+export const editarPedidoRequestSchema = criarPedidoRequestSchema;
+
+export type EditarPedidoRequest = CriarPedidoRequest;
+
+export const cancelarPedidoRequestSchema = z
+  .object({ reason: textoOpcional('Reason', 500) })
+  .nullish()
+  .transform(corpo => corpo ?? {});
+
+export type CancelarPedidoRequest = z.output<typeof cancelarPedidoRequestSchema>;
+
+/**
  * Item de listagem: usado em Seus Pedidos e nos pedidos recentes da Home.
  */
 export const pedidoResumoResponseSchema = z.object({
@@ -92,7 +125,11 @@ export const pedidoResumoResponseSchema = z.object({
   createdAt: dataIso,
   updatedAt: dataIso.optional(),
   proposalsCount: z.number().int(),
-  chosenProposalValue: z.number().optional()
+  chosenProposalValue: z.number().optional(),
+  stage: z
+    .enum(estagiosPedido)
+    .optional()
+    .describe('Só em pedido Pending com proposta aceita: AwaitingSignatures até as duas partes assinarem o contrato, depois AwaitingPayment.')
 });
 
 export type PedidoResumoResponse = z.infer<typeof pedidoResumoResponseSchema>;
@@ -142,6 +179,11 @@ export const pedidoResponseSchema = z.object({
   createdAt: dataIso,
   updatedAt: dataIso.optional(),
   scope: z.unknown().optional().describe('Conteúdo completo de pedidos.escopo.'),
+  cancellationReason: z.string().optional().describe('Motivo informado pelo cliente ao cancelar o pedido, se houver.'),
+  stage: z
+    .enum(estagiosPedido)
+    .optional()
+    .describe('Só em pedido Pending com proposta aceita: AwaitingSignatures até as duas partes assinarem o contrato, depois AwaitingPayment.'),
   photos: z.array(fotoPedidoResponseSchema),
   proposals: z.array(propostaResponseSchema)
 });

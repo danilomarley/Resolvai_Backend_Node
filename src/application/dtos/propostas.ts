@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { dataIso } from './validacao.js';
-import { propostaResponseSchema } from './pedidos.js';
+import { inteiroDaQuery, propostaResponseSchema } from './pedidos.js';
 
 export const ordenacoesPropostas = ['price', 'deadline', 'rating'] as const;
 export const direcoesPropostas = ['asc', 'desc'] as const;
@@ -55,3 +55,30 @@ export const propostaDetalheResponseSchema = propostaResponseSchema.extend({
 });
 
 export type PropostaDetalheResponse = z.infer<typeof propostaDetalheResponseSchema>;
+
+/**
+ * Query de GET /api/v1/proposals/unviewed (#90): quantas propostas novas listar na navbar.
+ */
+export const propostasNovasQuerySchema = z.object({
+  limit: inteiroDaQuery('limit', 1, 20, 10).describe('Itens da lista, entre 1 e 20 (padrão 10). O total não depende do limite.')
+});
+
+export type PropostasNovasQuery = z.output<typeof propostasNovasQuerySchema>;
+
+export const propostaNovaResponseSchema = z.object({
+  id: z.guid().describe('Id da proposta.'),
+  orderId: z.guid(),
+  orderTitle: z.string(),
+  providerName: z.string(),
+  value: z.number(),
+  createdAt: dataIso.describe('Quando a proposta foi enviada.')
+});
+
+export type PropostaNovaResponse = z.infer<typeof propostaNovaResponseSchema>;
+
+export const propostasNovasResponseSchema = z.object({
+  total: z.number().int().nonnegative().describe('Propostas ainda não visualizadas, em pedidos abertos.'),
+  items: z.array(propostaNovaResponseSchema).describe('As mais recentes primeiro, até o limite pedido.')
+});
+
+export type PropostasNovasResponse = z.infer<typeof propostasNovasResponseSchema>;

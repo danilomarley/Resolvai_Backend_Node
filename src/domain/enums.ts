@@ -27,6 +27,23 @@ export type StatusPedido = (typeof StatusPedido)[keyof typeof StatusPedido];
 export const statusPedidos = Object.values(StatusPedido);
 
 /**
+ * Onde o pedido está entre o aceite da proposta e o pagamento. Não é persistido: sai do contrato (public.contratos)
+ * do pedido. Só existe para pedido aberto com proposta aceita; depois do pagamento o próprio status é InProgress.
+ */
+export const EstagioPedido = {
+  AwaitingSignatures: 'AwaitingSignatures',
+  AwaitingPayment: 'AwaitingPayment'
+} as const;
+
+export type EstagioPedido = (typeof EstagioPedido)[keyof typeof EstagioPedido];
+
+export const estagiosPedido = Object.values(EstagioPedido);
+
+/** Filtro de GET /orders por estágio: Open é o pedido aberto que ainda não aceitou nenhuma proposta. */
+export const filtrosEstagio = ['Open', ...estagiosPedido] as const;
+export type FiltroEstagio = (typeof filtrosEstagio)[number];
+
+/**
  * Persistido como texto na coluna propostas.status (enviada/visualizada/escolhida/nao_escolhida).
  */
 export const StatusProposta = {

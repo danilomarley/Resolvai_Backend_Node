@@ -10,6 +10,7 @@ import type {
   IEnderecoRepository,
   IPedidoQueries,
   IPedidoRepository,
+  ResultadoAlteracaoPedido,
   ISupabaseAuthClient,
   IUserRepository,
   SupabaseAuthUser,
@@ -18,16 +19,32 @@ import type {
 import { criarPagina, type PaginaResponse } from '../src/application/dtos/common.js';
 import type { ResumoHomeResponse } from '../src/application/dtos/home.js';
 import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse, PropostaResponse } from '../src/application/dtos/pedidos.js';
-import type { DirecaoPropostas, OrdenacaoPropostas, PropostaDetalheResponse } from '../src/application/dtos/propostas.js';
+import type { ContratoResponse } from '../src/application/dtos/contratos.js';
+import type { IContratoRepository, ResultadoAssinatura } from '../src/application/services/contrato-service.js';
+import type {
+  CobrancaPix,
+  ContratoParaCobranca,
+  IGatewayPagamento,
+  IPagamentoRepository,
+  NovaCobrancaPix,
+  NovoPagamento,
+  PagamentoRow
+} from '../src/application/services/pagamento-service.js';
+import type {
+  DirecaoPropostas,
+  OrdenacaoPropostas,
+  PropostaDetalheResponse,
+  PropostasNovasResponse
+} from '../src/application/dtos/propostas.js';
 import type { IPropostaRepository, ResultadoAceite } from '../src/application/services/proposta-service.js';
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
-import type { StatusPedido, UserRole } from '../src/domain/enums.js';
+import type { FiltroEstagio, StatusPedido, UserRole } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
 import type { Fornecedor } from '../src/domain/fornecedor.js';
 import type { FornecedorResponse } from '../src/application/dtos/fornecedores.js';
-import { UnauthorizedException } from '../src/application/errors.js';
+import { ServicoIndisponivelException, UnauthorizedException } from '../src/application/errors.js';
 
 export const usuario = (id?: string, extra: Partial<CurrentUser> = {}): CurrentUser => ({
   isAuthenticated: true,
@@ -57,8 +74,10 @@ export class FakeQueries implements IPedidoQueries {
   lastUserId?: string;
   calls = 0;
 
-  async list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number) {
-    [this.lastStatus, this.lastPage, this.lastPageSize] = [status, page, pageSize];
+  lastStage?: FiltroEstagio;
+
+  async list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number, stage?: FiltroEstagio) {
+    [this.lastStatus, this.lastPage, this.lastPageSize, this.lastStage] = [status, page, pageSize, stage];
     this.record(userId);
     return this.pagina;
   }
@@ -129,6 +148,33 @@ export class FakePropostaRepository implements IPropostaRepository {
     this.accepted++;
     return this.acceptResult;
   }
+
+  novas: PropostasNovasResponse = { total: 0, items: [] };
+  lastUnviewed?: { customerId: string; limit: number };
+
+  async listUnviewed(customerId: string, limit: number) {
+    this.lastUnviewed = { customerId, limit };
+    return this.novas;
+  }
+}
+
+export class FakeContratoRepository implements IContratoRepository {
+  contrato: ContratoResponse | null = null;
+  signResult: ResultadoAssinatura = 'ok';
+  signed: { contractId: string; parte: string; userId: string; textHash: string; ip: string | null }[] = [];
+
+  async getForCustomer() {
+    return this.contrato;
+  }
+
+  async getForProvider() {
+    return this.contrato;
+  }
+
+  async sign(contractId: string, parte: string, userId: string, textHash: string, ip: string | null) {
+    this.signed.push({ contractId, parte, userId, textHash, ip });
+    return this.signResult;
+  }
 }
 
 export class FakePedidoRepository implements IPedidoRepository {
@@ -142,6 +188,34 @@ export class FakePedidoRepository implements IPedidoRepository {
     this.lastClienteId = idCliente;
     this.lastEscopo = escopoJson;
     this.lastFotos = fotos.length;
+  }
+
+  result: ResultadoAlteracaoPedido = 'ok';
+  updated = 0;
+  cancelled = 0;
+  lastCancelReason: string | null | undefined;
+
+  async update(_id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]) {
+    this.updated++;
+    this.lastClienteId = idCliente;
+    this.lastEscopo = escopoJson;
+    this.lastFotos = fotos.length;
+    return this.result;
+  }
+
+  async cancel(_id: string, idCliente: string, motivo: string | null) {
+    this.cancelled++;
+    this.lastClienteId = idCliente;
+    this.lastCancelReason = motivo;
+    return this.result;
+  }
+
+  completed = 0;
+
+  async complete(_id: string, idCliente: string) {
+    this.completed++;
+    this.lastClienteId = idCliente;
+    return this.result;
   }
 }
 
@@ -301,5 +375,83 @@ export class FakeFornecedores implements IFornecedorRepository {
   }
   async completeExisting(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
     return this.addComplete(user, fornecedor, contato, especialidades);
+  }
+}
+
+/** Repositorio de pagamentos em memoria: so guarda o que os testes do webhook e do servico precisam ver. */
+export class FakePagamentoRepository implements IPagamentoRepository {
+  contrato: ContratoParaCobranca | null = null;
+  atual: PagamentoRow | null = null;
+  inseridos: NovoPagamento[] = [];
+  confirmados: string[] = [];
+  encerrados: { externalId: string; status: string }[] = [];
+
+  async getContratoParaCobranca() {
+    return this.contrato;
+  }
+
+  async getAtual() {
+    return this.atual;
+  }
+
+  async inserir(pagamento: NovoPagamento) {
+    this.inseridos.push(pagamento);
+    this.atual = {
+      id: pagamento.id,
+      orderId: pagamento.orderId,
+      customerId: pagamento.customerId,
+      status: 'pendente',
+      valueCents: pagamento.valueCents,
+      externalId: pagamento.externalId,
+      brCode: pagamento.brCode,
+      qrCodeBase64: pagamento.qrCodeBase64,
+      testMode: pagamento.testMode,
+      expiresAt: pagamento.expiresAt,
+      paidAt: null,
+      createdAt: new Date()
+    };
+  }
+
+  async encerrar(externalId: string, status: 'expirado' | 'cancelado') {
+    this.encerrados.push({ externalId, status });
+    if (this.atual?.externalId === externalId) this.atual = { ...this.atual, status };
+  }
+
+  async confirmar(externalId: string) {
+    this.confirmados.push(externalId);
+    if (this.atual?.externalId === externalId) this.atual = { ...this.atual, status: 'pago', paidAt: new Date() };
+    return true;
+  }
+}
+
+/** Gateway de pagamento de mentira: o status de cada cobranca e controlado pelo teste. */
+export class FakeGatewayPagamento implements IGatewayPagamento {
+  ambienteTeste = true;
+  criadas: NovaCobrancaPix[] = [];
+  consultas: string[] = [];
+  simuladas: string[] = [];
+  statusPorId = new Map<string, string>();
+  falhaNaConsulta = false;
+  private contador = 0;
+
+  async criarPix(nova: NovaCobrancaPix): Promise<CobrancaPix> {
+    this.criadas.push(nova);
+    const id = `pix_char_teste${++this.contador}`;
+    this.statusPorId.set(id, 'PENDING');
+    return { id, status: 'PENDING', brCode: `00020101021226pix-teste-${this.contador}`, qrCodeBase64: 'data:image/png;base64,AAAA', expiraEm: new Date(Date.now() + 1800_000) };
+  }
+
+  async consultar(id: string) {
+    this.consultas.push(id);
+    if (this.falhaNaConsulta) {
+      throw new ServicoIndisponivelException('fora do ar');
+    }
+
+    return { status: this.statusPorId.get(id) ?? 'PENDING' };
+  }
+
+  async simularPagamento(id: string) {
+    this.simuladas.push(id);
+    this.statusPorId.set(id, 'PAID');
   }
 }

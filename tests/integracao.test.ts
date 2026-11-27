@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -23,6 +23,11 @@ import { PropostaFornecedorRepository } from '../src/infrastructure/repositories
 import { AvaliacaoService } from '../src/application/services/avaliacao-service.js';
 import { AvaliacaoRepository } from '../src/infrastructure/repositories/avaliacao-repository.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
+import { ContratoService } from '../src/application/services/contrato-service.js';
+import { PagamentoService } from '../src/application/services/pagamento-service.js';
+import { PagamentoRepository } from '../src/infrastructure/repositories/pagamento-repository.js';
+import { chavePublicaAbacatePay } from '../src/domain/pagamento.js';
+import { ContratoRepository } from '../src/infrastructure/repositories/contrato-repository.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
 import { PrestadorService } from '../src/application/services/prestador-service.js';
@@ -37,7 +42,7 @@ import { PropostaRepository } from '../src/infrastructure/repositories/proposta-
 import { PrestadorRepository } from '../src/infrastructure/repositories/prestador-repository.js';
 import { PropostaPrestadorRepository } from '../src/infrastructure/repositories/proposta-prestador-repository.js';
 import { UserRepository } from '../src/infrastructure/repositories/user-repository.js';
-import { FakeArmazenamento, FakeAssistente, FakeSupabase } from './fakes.js';
+import { FakeArmazenamento, FakeAssistente, FakeGatewayPagamento, FakeSupabase } from './fakes.js';
 
 // PostgreSQL real (PGlite, em memória) com os mesmos scripts de db/scripts, acessado pelo driver pg da API.
 const issuer = 'https://projeto-teste.supabase.co/auth/v1';
@@ -82,6 +87,8 @@ describe('Integração com PostgreSQL', () => {
   const supabase = new FakeSupabase();
   const armazenamento = new FakeArmazenamento();
   const assistente = new FakeAssistente();
+  const gateway = new FakeGatewayPagamento();
+  const segredoWebhook = 'segredo-do-webhook-de-teste-com-mais-de-32-caracteres';
 
   const chamar = async (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, sub: string, payload?: unknown, email?: string) =>
     app.inject({ method, url, payload: payload as object, headers: { authorization: `Bearer ${await token(sub, email)}` } });
@@ -161,6 +168,8 @@ describe('Integração com PostgreSQL', () => {
         propostaFornecedorService: new PropostaFornecedorService(fornecedorService, new PropostaFornecedorRepository(database), armazenamento),
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
+        contratoService: new ContratoService(new ContratoRepository(database)),
+        pagamentoService: new PagamentoService(new PagamentoRepository(database), gateway, segredoWebhook),
         propostaService: new PropostaService(new PropostaRepository(database), new PedidoQueries(database)),
         prestadorService: new PrestadorService(new PrestadorRepository(database), users, fornecedores),
         propostaPrestadorService: new PropostaPrestadorService(new PropostaPrestadorRepository(database), fornecedorService, armazenamento),
@@ -1347,6 +1356,580 @@ describe('Integração com PostgreSQL', () => {
     const resposta = await app.inject({ method: 'GET', url: '/health' });
     expect(resposta.statusCode).toBe(200);
     expect(resposta.json()).toEqual({ status: 'ok' });
+  });
+
+  describe('editar e cancelar pedido (#85)', () => {
+    const e = {
+      dono: '8a000000-0000-4000-8000-000000000001',
+      outro: '8a000000-0000-4000-8000-000000000002',
+      prestador: '8a000000-0000-4000-8000-0000000000a1'
+    };
+    const ped = (n: number) => `8b000000-0000-4000-8000-00000000000${n}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+    const formulario = {
+      titulo: 'Trocar o chuveiro',
+      categoria: 'Elétrica',
+      descricao: 'Chuveiro queimou e precisa de troca.',
+      localizacao: 'Meireles, Fortaleza',
+      urgencia: 'Alta',
+      fotos: [{ url: 'https://exemplo.com/nova.jpg', descricao: 'Chuveiro' }]
+    };
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${e.dono}', 'Dono do Pedido', 'dono85@teste.com', 'Cliente', '85000000011', now()),
+          ('${e.outro}', 'Outro Cliente', 'outro85@teste.com', 'Cliente', '85000000022', now()),
+          ('${e.prestador}', 'Prestador 85', 'prest85@teste.com', 'Prestador', null, now());
+
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${e.dono}', '{"titulo":"Antigo","categoria":"Hidráulica","descricao":"Descrição antiga do pedido","localizacao":"Aldeota"}', 'aberto'),
+          ('${ped(2)}', '${e.dono}', '{"titulo":"Com propostas"}', 'aberto'),
+          ('${ped(3)}', '${e.dono}', '{"titulo":"Sem corpo"}', 'aberto'),
+          ('${ped(4)}', '${e.dono}', '{"titulo":"Proposta aceita"}', 'aberto'),
+          ('${ped(5)}', '${e.dono}', '{"titulo":"Em andamento"}', 'em_andamento'),
+          ('${ped(6)}', '${e.dono}', '{"titulo":"Já cancelado"}', 'cancelado');
+
+        insert into fotos_pedido (id, id_pedido, foto) values
+          ('8c000000-0000-4000-8000-000000000001', '${ped(1)}', 'https://exemplo.com/antiga.jpg');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor) values
+          ('8d000000-0000-4000-8000-000000000001', '${ped(2)}', '${e.prestador}', 'enviada', 100),
+          ('8d000000-0000-4000-8000-000000000002', '${ped(4)}', '${e.prestador}', 'escolhida', 200);
+      `);
+    });
+
+    it('edita o pedido: troca campos e fotos, atualiza a data e só o dono altera', async () => {
+      const corpo = { ...formulario };
+      expect((await app.inject({ method: 'PATCH', url: `/api/v1/orders/${ped(1)}`, payload: corpo })).statusCode).toBe(401);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.outro, corpo)).statusCode).toBe(404);
+      expect((await chamar('PATCH', '/api/v1/orders/abc', e.dono, corpo)).statusCode).toBe(404);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, { ...corpo, descricao: 'curta' })).statusCode).toBe(400);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, { ...corpo, fotos: Array(5).fill(corpo.fotos[0]) })).statusCode).toBe(400);
+
+      const resposta = await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, corpo);
+      expect(resposta.statusCode).toBe(200);
+      const pedido = resposta.json();
+      expect(pedido).toMatchObject({
+        id: ped(1), title: 'Trocar o chuveiro', category: 'Elétrica', location: 'Meireles, Fortaleza',
+        description: 'Chuveiro queimou e precisa de troca.', status: 'Pending'
+      });
+      expect(pedido.scope).toMatchObject({ urgencia: 'Alta' });
+      expect(pedido.updatedAt).toEqual(expect.any(String));
+      expect(pedido.photos.map((f: { url: string }) => f.url)).toEqual(['https://exemplo.com/nova.jpg']);
+      expect(pedido.cancellationReason).toBeUndefined();
+
+      // Sem fotos no corpo, as fotos anteriores são removidas.
+      const semFotos = await chamar('PATCH', `/api/v1/orders/${ped(1)}`, e.dono, { ...corpo, fotos: [] });
+      expect(semFotos.json().photos).toEqual([]);
+    });
+
+    it('recusa a edição quando o pedido não está aberto ou já tem proposta aceita', async () => {
+      for (const n of [4, 5, 6]) {
+        const resposta = await chamar('PATCH', `/api/v1/orders/${ped(n)}`, e.dono, formulario);
+        expect(resposta.statusCode).toBe(409);
+      }
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(4)}`, e.dono, formulario)).json().detail).toContain('proposta já foi aceita');
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(5)}`, e.dono, formulario)).json().detail).toContain('em andamento');
+      const intacto = await corpoDe(chamar('GET', `/api/v1/orders/${ped(4)}`, e.dono));
+      expect(intacto.title).toBe('Proposta aceita');
+    });
+
+    it('cancela com motivo, libera as propostas pendentes e mostra o pedido como Cancelled', async () => {
+      const antes = (await corpoDe(chamar('GET', '/api/v1/home/summary', e.dono))).orders;
+
+      expect((await app.inject({ method: 'POST', url: `/api/v1/orders/${ped(2)}/cancel`, payload: {} })).statusCode).toBe(401);
+      expect((await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.outro, {})).statusCode).toBe(404);
+      expect((await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.dono, { reason: 'x'.repeat(501) })).statusCode).toBe(400);
+
+      const resposta = await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.dono, { reason: '  Resolvi por conta própria  ' });
+      expect(resposta.statusCode).toBe(200);
+      const pedido = resposta.json();
+      expect(pedido).toMatchObject({ status: 'Cancelled', cancellationReason: 'Resolvi por conta própria' });
+      expect(pedido.proposals.map((p: { status: string }) => p.status)).toEqual(['NotChosen']);
+      expect(pedido.updatedAt).toEqual(expect.any(String));
+
+      const depois = (await corpoDe(chamar('GET', '/api/v1/home/summary', e.dono))).orders;
+      expect(depois.cancelled).toBe(antes.cancelled + 1);
+      expect(depois.pending).toBe(antes.pending - 1);
+
+      const repetido = await chamar('POST', `/api/v1/orders/${ped(2)}/cancel`, e.dono, {});
+      expect(repetido.statusCode).toBe(409);
+      expect((await chamar('PATCH', `/api/v1/orders/${ped(2)}`, e.dono, formulario)).statusCode).toBe(409);
+    });
+
+    it('cancela sem corpo nem motivo e recusa quando há proposta aceita ou serviço em andamento', async () => {
+      const semCorpo = await app.inject({
+        method: 'POST', url: `/api/v1/orders/${ped(3)}/cancel`,
+        headers: { authorization: `Bearer ${await token(e.dono)}` }
+      });
+      expect(semCorpo.statusCode).toBe(200);
+      expect(semCorpo.json()).toMatchObject({ status: 'Cancelled' });
+      expect(semCorpo.json().cancellationReason).toBeUndefined();
+
+      expect((await chamar('POST', `/api/v1/orders/${ped(4)}/cancel`, e.dono, {})).statusCode).toBe(409);
+      expect((await chamar('POST', `/api/v1/orders/${ped(5)}/cancel`, e.dono, {})).statusCode).toBe(409);
+      expect((await corpoDe(chamar('GET', `/api/v1/orders/${ped(4)}`, e.dono))).status).toBe('Pending');
+      expect((await corpoDe(chamar('GET', `/api/v1/orders/${ped(5)}`, e.dono))).status).toBe('InProgress');
+    });
+  });
+
+  describe('alertas de propostas novas (#90)', () => {
+    const n = {
+      dono: '9e000000-0000-4000-8000-000000000001',
+      outro: '9e000000-0000-4000-8000-000000000002',
+      ana: '9e000000-0000-4000-8000-0000000000a1',
+      bruno: '9e000000-0000-4000-8000-0000000000b2'
+    };
+    const ped = (x: number) => `9f000000-0000-4000-8000-00000000000${x}`;
+    const prop = (x: number) => `9f100000-0000-4000-8000-00000000000${x}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${n.dono}', 'Dono Alertas', 'dono90@teste.com', 'Cliente', '90000000011', now()),
+          ('${n.outro}', 'Outro Alertas', 'outro90@teste.com', 'Cliente', '90000000022', now()),
+          ('${n.ana}', 'Ana Eletricista', 'ana90@teste.com', 'Prestador', null, now()),
+          ('${n.bruno}', 'Bruno Pedreiro', 'bruno90@teste.com', 'Prestador', null, now());
+
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${n.dono}', '{"titulo":"Trocar chuveiro"}', 'aberto'),
+          ('${ped(2)}', '${n.dono}', '{"categoria":"Hidráulica"}', 'aberto'),
+          ('${ped(3)}', '${n.dono}', '{"titulo":"Cancelado"}', 'cancelado'),
+          ('${ped(4)}', '${n.dono}', '{"titulo":"Em andamento"}', 'em_andamento'),
+          ('${ped(5)}', '${n.outro}', '{"titulo":"Pedido do outro"}', 'aberto');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor, data_criacao) values
+          ('${prop(1)}', '${ped(1)}', '${n.ana}', 'enviada', 300, '2026-11-01T10:00:00Z'),
+          ('${prop(2)}', '${ped(1)}', '${n.bruno}', 'visualizada', 250, '2026-11-02T10:00:00Z'),
+          ('${prop(3)}', '${ped(2)}', '${n.ana}', 'enviada', 500.5, '2026-11-03T10:00:00Z'),
+          ('${prop(4)}', '${ped(3)}', '${n.ana}', 'enviada', 100, '2026-11-04T10:00:00Z'),
+          ('${prop(5)}', '${ped(4)}', '${n.ana}', 'escolhida', 100, '2026-11-05T10:00:00Z'),
+          ('${prop(6)}', '${ped(5)}', '${n.bruno}', 'enviada', 100, '2026-11-06T10:00:00Z');
+      `);
+    });
+
+    it('lista só as propostas enviadas e ainda não abertas de pedidos abertos do cliente, a mais recente primeiro', async () => {
+      expect((await app.inject({ method: 'GET', url: '/api/v1/proposals/unviewed' })).statusCode).toBe(401);
+
+      const corpo = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.dono));
+      expect(corpo.total).toBe(2);
+      expect(corpo.items).toEqual([
+        { id: prop(3), orderId: ped(2), orderTitle: 'Hidráulica', providerName: 'Ana Eletricista', value: 500.5, createdAt: '2026-11-03T10:00:00.000Z' },
+        { id: prop(1), orderId: ped(1), orderTitle: 'Trocar chuveiro', providerName: 'Ana Eletricista', value: 300, createdAt: '2026-11-01T10:00:00.000Z' }
+      ]);
+
+      const doOutro = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.outro));
+      expect(doOutro.items.map((i: { id: string }) => i.id)).toEqual([prop(6)]);
+    });
+
+    it('o limite corta a lista mas não o total, e valores inválidos são recusados', async () => {
+      const corpo = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed?limit=1', n.dono));
+      expect(corpo.total).toBe(2);
+      expect(corpo.items.map((i: { id: string }) => i.id)).toEqual([prop(3)]);
+      for (const limite of ['0', '21', 'abc']) {
+        expect((await chamar('GET', `/api/v1/proposals/unviewed?limit=${limite}`, n.dono)).statusCode).toBe(400);
+      }
+    });
+
+    it('abrir o detalhe da proposta tira ela da lista e do total', async () => {
+      expect((await chamar('GET', `/api/v1/orders/${ped(2)}/proposals/${prop(3)}`, n.dono)).statusCode).toBe(200);
+      const corpo = await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.dono));
+      expect(corpo.total).toBe(1);
+      expect(corpo.items.map((i: { id: string }) => i.id)).toEqual([prop(1)]);
+
+      expect((await chamar('GET', `/api/v1/orders/${ped(1)}/proposals/${prop(1)}`, n.dono)).statusCode).toBe(200);
+      expect(await corpoDe(chamar('GET', '/api/v1/proposals/unviewed', n.dono))).toEqual({ total: 0, items: [] });
+    });
+  });
+
+  describe('contrato de prestação de serviços (#95)', () => {
+    const k = {
+      cliente: 'a1000000-0000-4000-8000-000000000001',
+      outro: 'a1000000-0000-4000-8000-000000000002',
+      ana: 'a1000000-0000-4000-8000-0000000000a1',
+      bruno: 'a1000000-0000-4000-8000-0000000000b2'
+    };
+    const ped = (x: number) => `a2000000-0000-4000-8000-00000000000${x}`;
+    const prop = { ana: 'a3000000-0000-4000-8000-0000000000a1', bruno: 'a3000000-0000-4000-8000-0000000000b2', antiga: 'a3000000-0000-4000-8000-0000000000c3' };
+    const urlCliente = (x: number, resto = '') => `/api/v1/orders/${ped(x)}/contract${resto}`;
+    const urlPrestador = (proposta: string, resto = '') => `/api/v1/provider/proposals/${proposta}/contract${resto}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+    const hash = (texto: string) => createHash('sha256').update(texto, 'utf8').digest('hex');
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${k.cliente}', 'Maria Contratante', 'maria95@teste.com', 'Cliente', '95000000011', now()),
+          ('${k.outro}', 'Outro Contratante', 'outro95@teste.com', 'Cliente', '95000000022', now()),
+          ('${k.ana}', 'Ana Eletricista', 'ana95@teste.com', 'Prestador', '95000000033', now()),
+          ('${k.bruno}', 'Bruno Pedreiro', 'bruno95@teste.com', 'Prestador', '95000000044', now());
+
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${k.cliente}', '{"titulo":"Trocar o chuveiro","categoria":"Elétrica","descricao":"Chuveiro queimou e precisa de troca","localizacao":"Meireles, Fortaleza","especificacoes":"Trocar e testar"}', 'aberto'),
+          ('${ped(2)}', '${k.cliente}', '{"titulo":"Pedido antigo"}', 'aberto');
+
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias, descricao, garantia, garantia_condicoes) values
+          ('${prop.ana}', '${ped(1)}', '${k.ana}', 'enviada', 800.00, '5 dias úteis', 5, 'Instalação completa', '90 dias', 'Não cobre mau uso'),
+          ('${prop.bruno}', '${ped(1)}', '${k.bruno}', 'enviada', 700.00, '3 dias', 3, null, '30 dias', null),
+          -- aceita antes de existir a tabela de contratos: o contrato é gerado na primeira consulta
+          ('${prop.antiga}', '${ped(2)}', '${k.ana}', 'escolhida', 250.00, '2 dias', 2, null, '60 dias', null);
+      `);
+    });
+
+    it('sem proposta aceita não há contrato, e só o contratante dono do pedido o consulta depois', async () => {
+      expect((await chamar('GET', urlCliente(1), k.cliente)).statusCode).toBe(404);
+      expect((await chamar('GET', urlPrestador(prop.ana), k.ana)).statusCode).toBe(404);
+
+      expect((await chamar('POST', `/api/v1/orders/${ped(1)}/proposals/${prop.ana}/accept`, k.cliente)).statusCode).toBe(200);
+
+      expect((await app.inject({ method: 'GET', url: urlCliente(1) })).statusCode).toBe(401);
+      expect((await chamar('GET', urlCliente(1), k.outro)).statusCode).toBe(404);
+      expect((await chamar('GET', '/api/v1/orders/abc/contract', k.cliente)).statusCode).toBe(404);
+    });
+
+    it('o aceite gera o contrato com os dados da proposta, o hash do texto e o documento mascarado', async () => {
+      const contrato = await corpoDe(chamar('GET', urlCliente(1), k.cliente));
+      expect(contrato).toMatchObject({
+        orderId: ped(1), proposalId: prop.ana, status: 'Pending', value: 800,
+        customerName: 'Maria Contratante', providerName: 'Ana Eletricista', templateVersion: '2026-11-v1'
+      });
+      expect(contrato.customerSignedAt).toBeUndefined();
+      expect(contrato.providerSignedAt).toBeUndefined();
+      expect(contrato.textHash).toBe(hash(contrato.text));
+      expect(contrato.text).toContain('CONTRATANTE: Maria Contratante, CPF ***.000.000-**.');
+      expect(contrato.text).toContain('PRESTADOR: Ana Eletricista, CPF ***.000.000-**.');
+      expect(contrato.text).toContain('o serviço "Trocar o chuveiro" (Elétrica), no local Meireles, Fortaleza');
+      expect(contrato.text).toMatch(/O valor total do serviço é de R\$\s?800,00\./);
+      expect(contrato.text).toContain('Prazo de execução: 5 dias úteis');
+      expect(contrato.text).toContain('Garantia do serviço: 90 dias.');
+      expect(contrato.text).toContain('Condições da garantia: Não cobre mau uso');
+      expect(contrato.text).not.toContain('95000000011');
+
+      // A mesma consulta devolve o mesmo contrato, sem gerar outro.
+      expect((await corpoDe(chamar('GET', urlCliente(1), k.cliente))).id).toBe(contrato.id);
+      expect((await pglite.query(`select count(*)::int as n from contratos where id_pedido = '${ped(1)}'`)).rows).toEqual([{ n: 1 }]);
+    });
+
+    it('o prestador escolhido vê o mesmo contrato; outro prestador e o contratante nessa rota não', async () => {
+      const doCliente = await corpoDe(chamar('GET', urlCliente(1), k.cliente));
+      const doPrestador = await corpoDe(chamar('GET', urlPrestador(prop.ana), k.ana));
+      expect(doPrestador).toEqual(doCliente);
+
+      expect((await chamar('GET', urlPrestador(prop.ana), k.bruno)).statusCode).toBe(404);
+      expect((await chamar('GET', urlPrestador(prop.bruno), k.bruno)).statusCode).toBe(404);
+      expect((await chamar('GET', urlPrestador(prop.ana), k.cliente)).statusCode).toBe(403);
+    });
+
+    it('as duas partes assinam: Pending até a segunda assinatura, depois Signed, com data e IP registrados', async () => {
+      const { textHash } = await corpoDe(chamar('GET', urlCliente(1), k.cliente));
+
+      expect((await chamar('POST', urlCliente(1, '/sign'), k.cliente, {})).statusCode).toBe(400);
+      expect((await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash: 'abc' })).statusCode).toBe(400);
+      const outroTexto = await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash: 'f'.repeat(64) });
+      expect(outroTexto.statusCode).toBe(409);
+      expect(outroTexto.json().detail).toContain('não é mais o que você leu');
+      expect((await chamar('POST', urlCliente(1, '/sign'), k.outro, { textHash })).statusCode).toBe(404);
+      expect((await chamar('POST', urlPrestador(prop.ana, '/sign'), k.bruno, { textHash })).statusCode).toBe(404);
+
+      const doCliente = await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash: textHash.toUpperCase() });
+      expect(doCliente.statusCode).toBe(200);
+      expect(doCliente.json()).toMatchObject({ status: 'Pending', customerSignedAt: expect.any(String) });
+      expect(doCliente.json().providerSignedAt).toBeUndefined();
+
+      // O prestador já vê que o contratante assinou, e o contratante não assina duas vezes.
+      expect((await corpoDe(chamar('GET', urlPrestador(prop.ana), k.ana))).customerSignedAt).toEqual(expect.any(String));
+      const repetido = await chamar('POST', urlCliente(1, '/sign'), k.cliente, { textHash });
+      expect(repetido.statusCode).toBe(409);
+      expect(repetido.json().detail).toBe('Você já assinou este contrato.');
+
+      const doPrestador = await chamar('POST', urlPrestador(prop.ana, '/sign'), k.ana, { textHash });
+      expect(doPrestador.statusCode).toBe(200);
+      expect(doPrestador.json()).toMatchObject({ status: 'Signed', customerSignedAt: expect.any(String), providerSignedAt: expect.any(String) });
+      expect((await chamar('POST', urlPrestador(prop.ana, '/sign'), k.ana, { textHash })).statusCode).toBe(409);
+      expect((await corpoDe(chamar('GET', urlCliente(1), k.cliente))).status).toBe('Signed');
+
+      const registro = (await pglite.query<{ cliente: string | null; prestador: string | null; status: string }>(
+        `select assinatura_cliente_ip as cliente, assinatura_prestador_ip as prestador, status from contratos where id_pedido = '${ped(1)}'`
+      )).rows[0]!;
+      expect(registro.status).toBe('assinado');
+      expect(registro.cliente).toBeTruthy();
+      expect(registro.prestador).toBeTruthy();
+    });
+
+    it('quem assina primeiro pode ser o prestador, e a proposta aceita antes da tabela ganha o contrato na primeira consulta', async () => {
+      const gerado = await corpoDe(chamar('GET', urlCliente(2), k.cliente));
+      expect(gerado).toMatchObject({ proposalId: prop.antiga, status: 'Pending', value: 250 });
+      expect(gerado.text).toContain('Prazo de execução: 2 dias');
+      expect(gerado.text).toContain('Garantia do serviço: 60 dias.');
+
+      const doPrestador = await chamar('POST', urlPrestador(prop.antiga, '/sign'), k.ana, { textHash: gerado.textHash });
+      expect(doPrestador.json()).toMatchObject({ status: 'Pending', providerSignedAt: expect.any(String) });
+      expect(doPrestador.json().customerSignedAt).toBeUndefined();
+
+      const completo = await chamar('POST', urlCliente(2, '/sign'), k.cliente, { textHash: gerado.textHash });
+      expect(completo.json().status).toBe('Signed');
+    });
+  });
+
+  describe('pagamento por Pix (#96)', () => {
+    const g = {
+      cliente: 'b1000000-0000-4000-8000-000000000001',
+      outro: 'b1000000-0000-4000-8000-000000000002',
+      ana: 'b1000000-0000-4000-8000-0000000000a1'
+    };
+    const ped = (x: number) => `b2000000-0000-4000-8000-00000000000${x}`;
+    const prop = (x: number) => `b3000000-0000-4000-8000-00000000000${x}`;
+    const url = (x: number, resto = '') => `/api/v1/orders/${ped(x)}/payment${resto}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+    const assinar = (texto: string) => createHmac('sha256', chavePublicaAbacatePay).update(texto).digest('base64');
+    const webhook = (externalId: string, status = 'PAID') => {
+      const corpo = JSON.stringify({ event: 'transparent.completed', data: { transparent: { id: externalId, status } } });
+      return app.inject({
+        method: 'POST',
+        url: '/api/v1/webhooks/abacatepay',
+        headers: { 'content-type': 'application/json', 'x-webhook-secret': segredoWebhook, 'x-webhook-signature': assinar(corpo) },
+        payload: corpo
+      });
+    };
+    // Estagio no detalhe e na lista (Seus Pedidos), que precisam concordar.
+    const estagios = async (x: number, sub = g.cliente) => {
+      const detalhe = await corpoDe(chamar('GET', `/api/v1/orders/${ped(x)}`, sub));
+      const lista = await corpoDe(chamar('GET', '/api/v1/orders?pageSize=50', sub));
+      const item = lista.items.find((i: { id: string }) => i.id === ped(x));
+      expect(item.stage).toBe(detalhe.stage);
+      return detalhe.stage as string | undefined;
+    };
+    const statusPedido = async (x: number) => (await pglite.query<{ status: string }>(`select status from pedidos where id = '${ped(x)}'`)).rows[0]!.status;
+
+    // Aceita a proposta e leva o contrato ate Signed (as duas partes assinam).
+    async function contratoAssinado(x: number, assinaTudo = true) {
+      expect((await chamar('POST', `/api/v1/orders/${ped(x)}/proposals/${prop(x)}/accept`, g.cliente)).statusCode).toBe(200);
+      const { textHash } = await corpoDe(chamar('GET', `/api/v1/orders/${ped(x)}/contract`, g.cliente));
+      expect((await chamar('POST', `/api/v1/orders/${ped(x)}/contract/sign`, g.cliente, { textHash })).statusCode).toBe(200);
+      if (assinaTudo) {
+        expect((await chamar('POST', `/api/v1/provider/proposals/${prop(x)}/contract/sign`, g.ana, { textHash })).statusCode).toBe(200);
+      }
+    }
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${g.cliente}', 'Maria Pagadora', 'maria96@teste.com', 'Cliente', '96000000011', now()),
+          ('${g.outro}', 'Outro Cliente', 'outro96@teste.com', 'Cliente', '96000000022', now()),
+          ('${g.ana}', 'Ana Prestadora', 'ana96@teste.com', 'Prestador', '96000000033', now());
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${g.cliente}', '{"titulo":"Pintar a sala","categoria":"Pintura","descricao":"Pintura completa da sala"}', 'aberto'),
+          ('${ped(2)}', '${g.cliente}', '{"titulo":"Trocar tomadas","categoria":"Elétrica","descricao":"Trocar tomadas da cozinha"}', 'aberto'),
+          ('${ped(3)}', '${g.cliente}', '{"titulo":"Pedido sem aceite"}', 'aberto');
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias) values
+          ('${prop(1)}', '${ped(1)}', '${g.ana}', 'enviada', 800.00, '5 dias', 5),
+          ('${prop(2)}', '${ped(2)}', '${g.ana}', 'enviada', 199.90, '2 dias', 2);
+      `);
+    });
+
+    it('não há pagamento antes do contrato; contrato só do contratante assinado não libera a cobrança', async () => {
+      expect((await app.inject({ method: 'POST', url: url(1) })).statusCode).toBe(401);
+      expect((await chamar('POST', url(3), g.cliente)).statusCode).toBe(404);
+      expect((await chamar('GET', url(1), g.cliente)).statusCode).toBe(404);
+
+      expect(await estagios(1)).toBeUndefined();
+      await contratoAssinado(1, false);
+      expect(await estagios(1)).toBe('AwaitingSignatures');
+      const antes = await chamar('POST', url(1), g.cliente);
+      expect(antes.statusCode).toBe(409);
+      expect(antes.json().detail).toContain('duas partes assinarem');
+      expect((await pglite.query('select count(*)::int as n from pagamentos')).rows).toEqual([{ n: 0 }]);
+    });
+
+    it('com as duas assinaturas gera o Pix (R$ 800,00 em centavos), e repetir devolve o mesmo sem cobrar de novo', async () => {
+      const { textHash } = await corpoDe(chamar('GET', `/api/v1/orders/${ped(1)}/contract`, g.cliente));
+      expect((await chamar('POST', `/api/v1/provider/proposals/${prop(1)}/contract/sign`, g.ana, { textHash })).statusCode).toBe(200);
+
+      expect(await estagios(1)).toBe('AwaitingPayment');
+      const primeiro = await chamar('POST', url(1), g.cliente);
+      expect(primeiro.statusCode).toBe(200);
+      expect(primeiro.json()).toMatchObject({ orderId: ped(1), method: 'Pix', status: 'Pending', amount: 800, testMode: true, qrCodeBase64: 'data:image/png;base64,AAAA' });
+      expect(primeiro.json().brCode).toContain('pix-teste');
+      expect(gateway.criadas.at(-1)).toMatchObject({ valorCentavos: 80000 });
+      const cobrancasAntes = gateway.criadas.length;
+
+      const repetido = await chamar('POST', url(1), g.cliente);
+      expect(repetido.json().id).toBe(primeiro.json().id);
+      expect(gateway.criadas).toHaveLength(cobrancasAntes);
+
+      // Só o dono vê a cobrança; a leitura não pode ser cacheada.
+      expect((await chamar('GET', url(1), g.outro)).statusCode).toBe(404);
+      expect((await chamar('POST', url(1), g.outro)).statusCode).toBe(404);
+      const leitura = await chamar('GET', url(1), g.cliente);
+      expect(leitura.json()).toEqual(primeiro.json());
+      expect(leitura.headers['cache-control']).toBe('no-store,no-cache');
+      expect(await statusPedido(1)).toBe('aberto');
+    });
+
+    it('dois pedidos simultâneos de Pix resultam em uma única cobrança viva', async () => {
+      await contratoAssinado(2);
+      const respostas = await Promise.all([chamar('POST', url(2), g.cliente), chamar('POST', url(2), g.cliente)]);
+      expect(respostas.map(r => r.statusCode)).toEqual([200, 200]);
+      expect((await pglite.query(`select count(*)::int as n from pagamentos where id_pedido = '${ped(2)}' and status = 'pendente'`)).rows).toEqual([{ n: 1 }]);
+      expect(respostas[0]!.json().id).toBe(respostas[1]!.json().id);
+      expect(respostas[0]!.json().amount).toBe(199.9);
+    });
+
+    it('a simulação paga o Pix, o pedido vira InProgress e não dá para cobrar nem simular de novo', async () => {
+      const cobranca = await corpoDe(chamar('GET', url(1), g.cliente));
+      expect((await chamar('POST', url(1, '/simulate'), g.outro)).statusCode).toBe(404);
+
+      const pago = await chamar('POST', url(1, '/simulate'), g.cliente);
+      expect(pago.statusCode).toBe(200);
+      expect(pago.json()).toMatchObject({ id: cobranca.id, status: 'Paid', paidAt: expect.any(String) });
+      expect(await statusPedido(1)).toBe('em_andamento');
+      expect((await corpoDe(chamar('GET', `/api/v1/orders/${ped(1)}`, g.cliente))).status).toBe('InProgress');
+      // Pago, o estagio some: o proprio status (InProgress) diz onde o pedido esta.
+      expect(await estagios(1)).toBeUndefined();
+
+      expect((await chamar('POST', url(1), g.cliente)).json().detail).toContain('já foi pago');
+      expect((await chamar('POST', url(1, '/simulate'), g.cliente)).statusCode).toBe(409);
+      expect((await chamar('GET', url(1), g.cliente)).json().status).toBe('Paid');
+    });
+
+    it('o webhook confirma o pagamento sem passar pela simulação, é idempotente e ignora cobrança desconhecida', async () => {
+      const externo = (await pglite.query<{ id_externo: string }>(`select id_externo from pagamentos where id_pedido = '${ped(2)}'`)).rows[0]!.id_externo;
+
+      expect((await webhook(externo)).statusCode).toBe(200);
+      expect((await webhook(externo)).statusCode).toBe(200);
+      expect((await webhook('pix_char_que_nao_existe')).statusCode).toBe(200);
+      expect(await statusPedido(2)).toBe('em_andamento');
+      expect((await chamar('GET', url(2), g.cliente)).json()).toMatchObject({ status: 'Paid' });
+      expect((await pglite.query(`select count(*)::int as n from pagamentos where id_pedido = '${ped(2)}' and status = 'pago'`)).rows).toEqual([{ n: 1 }]);
+    });
+
+    it('o contratante conclui o serviço pago e só então pode avaliá-lo', async () => {
+      const concluir = (x: number, sub: string) => chamar('POST', `/api/v1/orders/${ped(x)}/complete`, sub);
+
+      expect((await app.inject({ method: 'POST', url: `/api/v1/orders/${ped(1)}/complete` })).statusCode).toBe(401);
+      expect((await chamar('POST', '/api/v1/orders/abc/complete', g.cliente)).statusCode).toBe(404);
+      expect((await concluir(1, g.outro)).statusCode).toBe(404);
+
+      // Sem pagamento (pedido aberto) nao conclui, e pedido em andamento ainda nao pode ser avaliado.
+      const semPagar = await concluir(3, g.cliente);
+      expect(semPagar.statusCode).toBe(409);
+      expect(semPagar.json().detail).toContain('em andamento');
+      expect((await chamar('POST', `/api/v1/orders/${ped(1)}/review`, g.cliente, { rating: 5 })).statusCode).toBe(400);
+
+      const concluido = await concluir(1, g.cliente);
+      expect(concluido.statusCode).toBe(200);
+      expect(concluido.json()).toMatchObject({ id: ped(1), status: 'Completed' });
+      expect(concluido.json().stage).toBeUndefined();
+      expect(concluido.headers['cache-control']).toBe('no-store,no-cache');
+      expect((await concluir(1, g.cliente)).statusCode).toBe(409);
+      // O pagamento segue registrado como pago.
+      expect((await chamar('GET', url(1), g.cliente)).json().status).toBe('Paid');
+
+      expect((await chamar('POST', `/api/v1/orders/${ped(1)}/review`, g.cliente, { rating: 5, comment: 'Serviço excelente' })).statusCode).toBe(201);
+    });
+
+    it('Pix pago depois de expirar vale: a cobrança nova pendente é cancelada e o pedido segue', async () => {
+      const dono = g.cliente;
+      const pedidoNovo = 'b2000000-0000-4000-8000-0000000000f4';
+      const propostaNova = 'b3000000-0000-4000-8000-0000000000f4';
+      await pglite.exec(`
+        insert into pedidos (id, id_cliente, escopo, status) values ('${pedidoNovo}', '${dono}', '{"titulo":"Pedido que expira"}', 'aberto');
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias) values ('${propostaNova}', '${pedidoNovo}', '${g.ana}', 'enviada', 120.00, '1 dia', 1);
+      `);
+      expect((await chamar('POST', `/api/v1/orders/${pedidoNovo}/proposals/${propostaNova}/accept`, dono)).statusCode).toBe(200);
+      const { textHash } = await corpoDe(chamar('GET', `/api/v1/orders/${pedidoNovo}/contract`, dono));
+      await chamar('POST', `/api/v1/orders/${pedidoNovo}/contract/sign`, dono, { textHash });
+      await chamar('POST', `/api/v1/provider/proposals/${propostaNova}/contract/sign`, g.ana, { textHash });
+
+      const primeira = await corpoDe(chamar('POST', `/api/v1/orders/${pedidoNovo}/payment`, dono));
+      const externoAntigo = (await pglite.query<{ id_externo: string }>(`select id_externo from pagamentos where id = '${primeira.id}'`)).rows[0]!.id_externo;
+      gateway.statusPorId.set(externoAntigo, 'EXPIRED');
+      expect((await chamar('GET', `/api/v1/orders/${pedidoNovo}/payment`, dono)).json().status).toBe('Expired');
+
+      const segunda = await corpoDe(chamar('POST', `/api/v1/orders/${pedidoNovo}/payment`, dono));
+      expect(segunda.status).toBe('Pending');
+      expect(segunda.id).not.toBe(primeira.id);
+
+      expect((await webhook(externoAntigo)).statusCode).toBe(200);
+      const estados = (await pglite.query<{ id: string; status: string }>(`select id, status from pagamentos where id_pedido = '${pedidoNovo}' order by data_criacao`)).rows;
+      expect(estados).toEqual([{ id: primeira.id, status: 'pago' }, { id: segunda.id, status: 'cancelado' }]);
+      expect((await chamar('GET', `/api/v1/orders/${pedidoNovo}`, dono)).json().status).toBe('InProgress');
+    });
+  });
+
+  describe('filtro da lista por estágio (#108)', () => {
+    const h = { dono: 'c1000000-0000-4000-8000-000000000001', ana: 'c1000000-0000-4000-8000-0000000000a1' };
+    const ped = (x: number) => `c2000000-0000-4000-8000-00000000000${x}`;
+    const prop = (x: number) => `c3000000-0000-4000-8000-00000000000${x}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ids = async (query: string) => ((await (await chamar('GET', `/api/v1/orders${query}`, h.dono)).json()) as any).items.map((i: { id: string }) => i.id).sort();
+    const contrato = (x: number, status: 'pendente' | 'assinado') =>
+      `insert into contratos (id_pedido, id_proposta, id_cliente, id_prestador, versao_modelo, texto, texto_hash, valor, status, assinado_cliente_em, assinado_prestador_em)
+       values ('${ped(x)}', '${prop(x)}', '${h.dono}', '${h.ana}', 'v', 't', repeat('a', 64), 100, '${status}', ${status === 'assinado' ? 'now()' : 'null'}, ${status === 'assinado' ? 'now()' : 'null'});`;
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${h.dono}', 'Dono Filtro', 'dono108@teste.com', 'Cliente', '10800000011', now()),
+          ('${h.ana}', 'Ana Filtro', 'ana108@teste.com', 'Prestador', '10800000033', now());
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${h.dono}', '{"titulo":"Aberto sem proposta"}', 'aberto'),
+          ('${ped(2)}', '${h.dono}', '{"titulo":"Aberto com proposta enviada"}', 'aberto'),
+          ('${ped(3)}', '${h.dono}', '{"titulo":"Aceito sem contrato ainda"}', 'aberto'),
+          ('${ped(4)}', '${h.dono}', '{"titulo":"Aceito, contrato pendente"}', 'aberto'),
+          ('${ped(5)}', '${h.dono}', '{"titulo":"Aceito, contrato assinado"}', 'aberto'),
+          ('${ped(6)}', '${h.dono}', '{"titulo":"Em andamento"}', 'em_andamento'),
+          ('${ped(7)}', '${h.dono}', '{"titulo":"Cancelado"}', 'cancelado');
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias) values
+          ('${prop(2)}', '${ped(2)}', '${h.ana}', 'enviada', 100, '1 dia', 1),
+          ('${prop(3)}', '${ped(3)}', '${h.ana}', 'escolhida', 100, '1 dia', 1),
+          ('${prop(4)}', '${ped(4)}', '${h.ana}', 'escolhida', 100, '1 dia', 1),
+          ('${prop(5)}', '${ped(5)}', '${h.ana}', 'escolhida', 100, '1 dia', 1),
+          ('${prop(6)}', '${ped(6)}', '${h.ana}', 'escolhida', 100, '1 dia', 1);
+        ${contrato(4, 'pendente')}
+        ${contrato(5, 'assinado')}
+      `);
+    });
+
+    it('Open traz só os pedidos abertos sem proposta aceita, e a proposta apenas enviada não tira o pedido de Open', async () => {
+      expect(await ids('?stage=Open')).toEqual([ped(1), ped(2)]);
+    });
+
+    it('AwaitingSignatures inclui o aceito sem contrato gerado ainda e o de contrato pendente', async () => {
+      expect(await ids('?stage=AwaitingSignatures')).toEqual([ped(3), ped(4)]);
+    });
+
+    it('AwaitingPayment traz só o contrato assinado pelas duas partes', async () => {
+      expect(await ids('?stage=AwaitingPayment')).toEqual([ped(5)]);
+    });
+
+    it('combina com o status, sem diferenciar maiúsculas, e estágio em pedido fora de Pending não existe', async () => {
+      expect(await ids('?status=Pending&stage=Open')).toEqual([ped(1), ped(2)]);
+      expect(await ids('?status=pending&stage=awaitingpayment')).toEqual([ped(5)]);
+      expect(await ids('?status=InProgress&stage=AwaitingPayment')).toEqual([]);
+      expect(await ids('?status=Cancelled&stage=Open')).toEqual([]);
+      // Sem stage nada muda: todos os pedidos do usuário.
+      expect(await ids('?pageSize=50')).toHaveLength(7);
+    });
+
+    it('a paginação conta só os pedidos do filtro', async () => {
+      const pagina = (await chamar('GET', '/api/v1/orders?stage=AwaitingSignatures&pageSize=1', h.dono)).json();
+      expect(pagina).toMatchObject({ totalItems: 2, totalPages: 2, page: 1, pageSize: 1 });
+      expect(pagina.items).toHaveLength(1);
+      expect((await chamar('GET', '/api/v1/orders?stage=AwaitingSignatures&pageSize=1&page=2', h.dono)).json().items).toHaveLength(1);
+    });
+
+    it('o filtro vale só para os pedidos do próprio usuário', async () => {
+      const outro = randomUUID();
+      await database.query("insert into users (id, name, email, role) values ($1, 'Outro 108', 'outro108@teste.com', 'Cliente')", [outro]);
+      expect((await (await chamar('GET', '/api/v1/orders?stage=Open', outro)).json()).items).toEqual([]);
+    });
   });
 
   describe('avaliação pós-serviço (#92)', () => {
