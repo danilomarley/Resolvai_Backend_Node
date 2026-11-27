@@ -77,7 +77,7 @@ export class PedidoService {
 
   // Os limites de página são validados no schema da rota (listarPedidosQuerySchema).
   async list(currentUser: CurrentUser, query: ListarPedidosQuery): Promise<PaginaResponse<PedidoResumoResponse>> {
-    return this.pedidos.list(getUserId(currentUser), query.status, query.page, query.pageSize);
+    return this.pedidos.list(getUserId(currentUser), query.status, query.page, query.pageSize, query.stage);
   }
 
   async getById(currentUser: CurrentUser, id: string): Promise<PedidoResponse> {

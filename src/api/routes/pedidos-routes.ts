@@ -92,7 +92,7 @@ export function pedidosRoutes(
         tags: ['Pedidos'],
         summary: 'Lista paginada dos pedidos do usuário autenticado (Seus Pedidos).',
         description:
-          'Ordenada por data de criação decrescente. Filtro opcional por status. page a partir de 1 e pageSize entre 1 e 50 (padrão 10).',
+          'Ordenada por data de criação decrescente. Filtros opcionais por status e por stage (Open, AwaitingSignatures, AwaitingPayment). page a partir de 1 e pageSize entre 1 e 50 (padrão 10).',
         querystring: listarPedidosQuerySchema,
         response: { 200: paginaPedidosResponseSchema }
       },

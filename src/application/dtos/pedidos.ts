@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { estagiosPedido, statusPedidos, statusPropostas } from '../../domain/enums.js';
+import { estagiosPedido, filtrosEstagio, statusPedidos, statusPropostas } from '../../domain/enums.js';
 import { paginaResponseSchema } from './common.js';
 import { dataIso, obrigatorio, tamanho, textoObrigatorio, textoOpcional, url } from './validacao.js';
 
@@ -50,6 +50,24 @@ export const listarPedidosQuerySchema = z.object({
       return status;
     })
     .describe('Pending, InProgress, Completed ou Cancelled. Sem valor, lista todos os status.'),
+  // Mesma regra do status: sem diferenciar maiúsculas, valor inválido é 400.
+  stage: z
+    .string()
+    .optional()
+    .transform((valor, ctx) => {
+      if (valor === undefined || valor === '') {
+        return undefined;
+      }
+
+      const estagio = filtrosEstagio.find(item => item.toLowerCase() === valor.trim().toLowerCase());
+      if (!estagio) {
+        ctx.addIssue({ code: 'custom', message: `O valor '${valor}' não é válido para stage.` });
+        return z.NEVER;
+      }
+
+      return estagio;
+    })
+    .describe('Open (aberto sem proposta aceita), AwaitingSignatures ou AwaitingPayment. Combina com status.'),
   page: inteiroDaQuery('page', 1, 2_147_483_647, 1).describe('Página a partir de 1 (padrão 1).'),
   pageSize: inteiroDaQuery('pageSize', 1, maxPageSize, 10).describe('Itens por página, entre 1 e 50 (padrão 10).')
 });

@@ -7,7 +7,7 @@ import type {
   PedidoResumoResponse,
   PropostaResponse
 } from '../../application/dtos/pedidos.js';
-import { StatusPedido, type EstagioPedido } from '../../domain/enums.js';
+import { StatusPedido, type EstagioPedido, type FiltroEstagio } from '../../domain/enums.js';
 import type { Database, Sql } from '../database.js';
 import { propostaColumns, propostaFrom, toProposta, type PropostaRow } from './proposta-sql.js';
 
@@ -89,9 +89,22 @@ interface FotoRow {
 export class PedidoQueries implements IPedidoQueries {
   constructor(private readonly database: Database) {}
 
-  list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number): Promise<PaginaResponse<PedidoResumoResponse>> {
-    const filtro = status === undefined ? '' : ' and p.status = $2';
-    const params: unknown[] = status === undefined ? [userId] : [userId, toDbStatus(status)];
+  list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number, stage?: FiltroEstagio): Promise<PaginaResponse<PedidoResumoResponse>> {
+    const params: unknown[] = [userId];
+    let filtro = '';
+    if (status !== undefined) {
+      params.push(toDbStatus(status));
+      filtro += ` and p.status = $${params.length}`;
+    }
+
+    // O estágio vem do contrato (mesma regra do campo stage); Open é o aberto sem proposta aceita.
+    if (stage === 'Open') {
+      filtro += ` and p.status = 'aberto' and (${estagioColumn}) is null`;
+    } else if (stage !== undefined) {
+      params.push(stage);
+      filtro += ` and (${estagioColumn}) = $${params.length}`;
+    }
+
     const limite = params.length + 1;
 
     return this.readSnapshot(async sql => {

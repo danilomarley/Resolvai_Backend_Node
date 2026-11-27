@@ -39,6 +39,10 @@ export type EstagioPedido = (typeof EstagioPedido)[keyof typeof EstagioPedido];
 
 export const estagiosPedido = Object.values(EstagioPedido);
 
+/** Filtro de GET /orders por estágio: Open é o pedido aberto que ainda não aceitou nenhuma proposta. */
+export const filtrosEstagio = ['Open', ...estagiosPedido] as const;
+export type FiltroEstagio = (typeof filtrosEstagio)[number];
+
 /**
  * Persistido como texto na coluna propostas.status (enviada/visualizada/escolhida/nao_escolhida).
  */
