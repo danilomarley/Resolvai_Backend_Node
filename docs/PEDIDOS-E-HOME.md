@@ -103,6 +103,8 @@ Valores inválidos retornam 400 (`ValidationProblemDetails`). Uma página além 
 
 `location` vem de `escopo.localizacao` e é omitido quando não foi informado. `proposalsCount` conta todas as propostas recebidas pelo pedido. `chosenProposalValue` é o valor da proposta com status `escolhida` e é omitido enquanto nenhuma foi escolhida.
 
+`stage` (listagem e detalhe) diz onde um pedido `Pending` com proposta aceita está: `AwaitingSignatures` até as duas partes assinarem o contrato e `AwaitingPayment` depois. Nos demais pedidos é omitido; depois do pagamento o próprio status é `InProgress`.
+
 ## POST /api/v1/orders
 
 Cria um pedido com status `aberto` (`Pending` na API) para o usuário do token e devolve o detalhe, com 201 e o cabeçalho `Location` apontando para `GET /api/v1/orders/{id}`.
@@ -153,6 +155,7 @@ Retorna os campos da listagem, exceto os dois de propostas, e acrescenta:
 | `location` | `escopo.localizacao` |
 | `scope` | `escopo` completo, como JSON |
 | `cancellationReason` | `pedidos.motivo_cancelamento`, só em pedidos cancelados com motivo informado |
+| `stage` | `AwaitingSignatures` ou `AwaitingPayment`, calculado a partir de `contratos`; só em pedido `Pending` com proposta aceita |
 | `photos[]` | `fotos_pedido`: `id`, `url` (valor da coluna `foto`, URL ou caminho no storage), `description` |
 | `proposals[]` | `propostas` + `users` + `avaliacoes`: `id`, `providerId`, `providerName`, `status`, `value`, `deadline`, `deadlineDays`, `description`, `warranty`, `createdAt`, `providerRating` (ver abaixo) |
 
