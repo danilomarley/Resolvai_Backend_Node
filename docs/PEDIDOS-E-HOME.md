@@ -26,6 +26,7 @@ Os nomes seguem a API C# para facilitar a comparação. Os campos do JSON e os v
 | GET | `/api/v1/orders/{id}` | Detalhe de um pedido com escopo, fotos e propostas | Resolvai_Cliente#49 |
 | PATCH | `/api/v1/orders/{id}` | Edita um pedido aberto e sem proposta aceita | Resolvai_Cliente#85 |
 | POST | `/api/v1/orders/{id}/cancel` | Cancela um pedido aberto e sem proposta aceita, com motivo opcional | Resolvai_Cliente#85 |
+| POST | `/api/v1/orders/{id}/complete` | Confirma a conclusão de um pedido em andamento (pago) | Resolvai_Cliente#92 |
 | GET | `/api/v1/home/summary` | Dados dos cards e os 5 pedidos mais recentes | Resolvai_Cliente#50 |
 | GET | `/api/v1/orders/{id}/proposals?sort=&direction=` | Propostas recebidas pelo pedido, ordenáveis | Resolvai_Cliente#83 |
 | GET | `/api/v1/orders/{id}/proposals/{proposalId}` | Detalhe da proposta com o resumo do prestador | Resolvai_Cliente#83 |
@@ -176,6 +177,12 @@ Corpo opcional: `{ "reason": "..." }`, até 500 caracteres, guardado em `pedidos
 ### Quando recusa (409)
 
 As duas rotas só funcionam enquanto o pedido está aberto (`Pending`) e nenhuma proposta foi aceita. Pedido cancelado, concluído ou em andamento, ou com proposta `Chosen`, retorna 409 com a mensagem em `detail`. A checagem e a gravação acontecem na mesma transação, com o pedido travado, então um aceite simultâneo não passa despercebido.
+
+## Conclusão do serviço (#92)
+
+### POST /api/v1/orders/{id}/complete
+
+Sem corpo. O contratante confirma que o serviço foi feito e o pedido passa de `InProgress` para `Completed`, o que libera a avaliação (`POST /api/v1/orders/{id}/review`). Só vale para pedido em andamento, isto é, com o pagamento confirmado ([PAGAMENTOS.md](PAGAMENTOS.md)): qualquer outro status retorna 409. Pedido inexistente ou de outro usuário retorna 404. Devolve o detalhe atualizado. O repasse do valor ao prestador não faz parte desta rota.
 
 ## Propostas do pedido (#83)
 
