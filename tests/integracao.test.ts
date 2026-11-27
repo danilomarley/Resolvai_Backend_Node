@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
@@ -26,6 +26,7 @@ import { FotoPedidoService } from '../src/application/services/foto-pedido-servi
 import { ContratoService } from '../src/application/services/contrato-service.js';
 import { PagamentoService } from '../src/application/services/pagamento-service.js';
 import { PagamentoRepository } from '../src/infrastructure/repositories/pagamento-repository.js';
+import { chavePublicaAbacatePay } from '../src/domain/pagamento.js';
 import { ContratoRepository } from '../src/infrastructure/repositories/contrato-repository.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
@@ -1672,6 +1673,155 @@ describe('Integração com PostgreSQL', () => {
 
       const completo = await chamar('POST', urlCliente(2, '/sign'), k.cliente, { textHash: gerado.textHash });
       expect(completo.json().status).toBe('Signed');
+    });
+  });
+
+  describe('pagamento por Pix (#96)', () => {
+    const g = {
+      cliente: 'b1000000-0000-4000-8000-000000000001',
+      outro: 'b1000000-0000-4000-8000-000000000002',
+      ana: 'b1000000-0000-4000-8000-0000000000a1'
+    };
+    const ped = (x: number) => `b2000000-0000-4000-8000-00000000000${x}`;
+    const prop = (x: number) => `b3000000-0000-4000-8000-00000000000${x}`;
+    const url = (x: number, resto = '') => `/api/v1/orders/${ped(x)}/payment${resto}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const corpoDe = async (resposta: Promise<{ json: () => unknown }>) => (await resposta).json() as any;
+    const assinar = (texto: string) => createHmac('sha256', chavePublicaAbacatePay).update(texto).digest('base64');
+    const webhook = (externalId: string, status = 'PAID') => {
+      const corpo = JSON.stringify({ event: 'transparent.completed', data: { transparent: { id: externalId, status } } });
+      return app.inject({
+        method: 'POST',
+        url: '/api/v1/webhooks/abacatepay',
+        headers: { 'content-type': 'application/json', 'x-webhook-secret': segredoWebhook, 'x-webhook-signature': assinar(corpo) },
+        payload: corpo
+      });
+    };
+    const statusPedido = async (x: number) => (await pglite.query<{ status: string }>(`select status from pedidos where id = '${ped(x)}'`)).rows[0]!.status;
+
+    // Aceita a proposta e leva o contrato ate Signed (as duas partes assinam).
+    async function contratoAssinado(x: number, assinaTudo = true) {
+      expect((await chamar('POST', `/api/v1/orders/${ped(x)}/proposals/${prop(x)}/accept`, g.cliente)).statusCode).toBe(200);
+      const { textHash } = await corpoDe(chamar('GET', `/api/v1/orders/${ped(x)}/contract`, g.cliente));
+      expect((await chamar('POST', `/api/v1/orders/${ped(x)}/contract/sign`, g.cliente, { textHash })).statusCode).toBe(200);
+      if (assinaTudo) {
+        expect((await chamar('POST', `/api/v1/provider/proposals/${prop(x)}/contract/sign`, g.ana, { textHash })).statusCode).toBe(200);
+      }
+    }
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${g.cliente}', 'Maria Pagadora', 'maria96@teste.com', 'Cliente', '96000000011', now()),
+          ('${g.outro}', 'Outro Cliente', 'outro96@teste.com', 'Cliente', '96000000022', now()),
+          ('${g.ana}', 'Ana Prestadora', 'ana96@teste.com', 'Prestador', '96000000033', now());
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${g.cliente}', '{"titulo":"Pintar a sala","categoria":"Pintura","descricao":"Pintura completa da sala"}', 'aberto'),
+          ('${ped(2)}', '${g.cliente}', '{"titulo":"Trocar tomadas","categoria":"Elétrica","descricao":"Trocar tomadas da cozinha"}', 'aberto'),
+          ('${ped(3)}', '${g.cliente}', '{"titulo":"Pedido sem aceite"}', 'aberto');
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias) values
+          ('${prop(1)}', '${ped(1)}', '${g.ana}', 'enviada', 800.00, '5 dias', 5),
+          ('${prop(2)}', '${ped(2)}', '${g.ana}', 'enviada', 199.90, '2 dias', 2);
+      `);
+    });
+
+    it('não há pagamento antes do contrato; contrato só do contratante assinado não libera a cobrança', async () => {
+      expect((await app.inject({ method: 'POST', url: url(1) })).statusCode).toBe(401);
+      expect((await chamar('POST', url(3), g.cliente)).statusCode).toBe(404);
+      expect((await chamar('GET', url(1), g.cliente)).statusCode).toBe(404);
+
+      await contratoAssinado(1, false);
+      const antes = await chamar('POST', url(1), g.cliente);
+      expect(antes.statusCode).toBe(409);
+      expect(antes.json().detail).toContain('duas partes assinarem');
+      expect((await pglite.query('select count(*)::int as n from pagamentos')).rows).toEqual([{ n: 0 }]);
+    });
+
+    it('com as duas assinaturas gera o Pix (R$ 800,00 em centavos), e repetir devolve o mesmo sem cobrar de novo', async () => {
+      const { textHash } = await corpoDe(chamar('GET', `/api/v1/orders/${ped(1)}/contract`, g.cliente));
+      expect((await chamar('POST', `/api/v1/provider/proposals/${prop(1)}/contract/sign`, g.ana, { textHash })).statusCode).toBe(200);
+
+      const primeiro = await chamar('POST', url(1), g.cliente);
+      expect(primeiro.statusCode).toBe(200);
+      expect(primeiro.json()).toMatchObject({ orderId: ped(1), method: 'Pix', status: 'Pending', amount: 800, testMode: true, qrCodeBase64: 'data:image/png;base64,AAAA' });
+      expect(primeiro.json().brCode).toContain('pix-teste');
+      expect(gateway.criadas.at(-1)).toMatchObject({ valorCentavos: 80000 });
+      const cobrancasAntes = gateway.criadas.length;
+
+      const repetido = await chamar('POST', url(1), g.cliente);
+      expect(repetido.json().id).toBe(primeiro.json().id);
+      expect(gateway.criadas).toHaveLength(cobrancasAntes);
+
+      // Só o dono vê a cobrança; a leitura não pode ser cacheada.
+      expect((await chamar('GET', url(1), g.outro)).statusCode).toBe(404);
+      expect((await chamar('POST', url(1), g.outro)).statusCode).toBe(404);
+      const leitura = await chamar('GET', url(1), g.cliente);
+      expect(leitura.json()).toEqual(primeiro.json());
+      expect(leitura.headers['cache-control']).toBe('no-store,no-cache');
+      expect(await statusPedido(1)).toBe('aberto');
+    });
+
+    it('dois pedidos simultâneos de Pix resultam em uma única cobrança viva', async () => {
+      await contratoAssinado(2);
+      const respostas = await Promise.all([chamar('POST', url(2), g.cliente), chamar('POST', url(2), g.cliente)]);
+      expect(respostas.map(r => r.statusCode)).toEqual([200, 200]);
+      expect((await pglite.query(`select count(*)::int as n from pagamentos where id_pedido = '${ped(2)}' and status = 'pendente'`)).rows).toEqual([{ n: 1 }]);
+      expect(respostas[0]!.json().id).toBe(respostas[1]!.json().id);
+      expect(respostas[0]!.json().amount).toBe(199.9);
+    });
+
+    it('a simulação paga o Pix, o pedido vira InProgress e não dá para cobrar nem simular de novo', async () => {
+      const cobranca = await corpoDe(chamar('GET', url(1), g.cliente));
+      expect((await chamar('POST', url(1, '/simulate'), g.outro)).statusCode).toBe(404);
+
+      const pago = await chamar('POST', url(1, '/simulate'), g.cliente);
+      expect(pago.statusCode).toBe(200);
+      expect(pago.json()).toMatchObject({ id: cobranca.id, status: 'Paid', paidAt: expect.any(String) });
+      expect(await statusPedido(1)).toBe('em_andamento');
+      expect((await corpoDe(chamar('GET', `/api/v1/orders/${ped(1)}`, g.cliente))).status).toBe('InProgress');
+
+      expect((await chamar('POST', url(1), g.cliente)).json().detail).toContain('já foi pago');
+      expect((await chamar('POST', url(1, '/simulate'), g.cliente)).statusCode).toBe(409);
+      expect((await chamar('GET', url(1), g.cliente)).json().status).toBe('Paid');
+    });
+
+    it('o webhook confirma o pagamento sem passar pela simulação, é idempotente e ignora cobrança desconhecida', async () => {
+      const externo = (await pglite.query<{ id_externo: string }>(`select id_externo from pagamentos where id_pedido = '${ped(2)}'`)).rows[0]!.id_externo;
+
+      expect((await webhook(externo)).statusCode).toBe(200);
+      expect((await webhook(externo)).statusCode).toBe(200);
+      expect((await webhook('pix_char_que_nao_existe')).statusCode).toBe(200);
+      expect(await statusPedido(2)).toBe('em_andamento');
+      expect((await chamar('GET', url(2), g.cliente)).json()).toMatchObject({ status: 'Paid' });
+      expect((await pglite.query(`select count(*)::int as n from pagamentos where id_pedido = '${ped(2)}' and status = 'pago'`)).rows).toEqual([{ n: 1 }]);
+    });
+
+    it('Pix pago depois de expirar vale: a cobrança nova pendente é cancelada e o pedido segue', async () => {
+      const dono = g.cliente;
+      const pedidoNovo = 'b2000000-0000-4000-8000-0000000000f4';
+      const propostaNova = 'b3000000-0000-4000-8000-0000000000f4';
+      await pglite.exec(`
+        insert into pedidos (id, id_cliente, escopo, status) values ('${pedidoNovo}', '${dono}', '{"titulo":"Pedido que expira"}', 'aberto');
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias) values ('${propostaNova}', '${pedidoNovo}', '${g.ana}', 'enviada', 120.00, '1 dia', 1);
+      `);
+      expect((await chamar('POST', `/api/v1/orders/${pedidoNovo}/proposals/${propostaNova}/accept`, dono)).statusCode).toBe(200);
+      const { textHash } = await corpoDe(chamar('GET', `/api/v1/orders/${pedidoNovo}/contract`, dono));
+      await chamar('POST', `/api/v1/orders/${pedidoNovo}/contract/sign`, dono, { textHash });
+      await chamar('POST', `/api/v1/provider/proposals/${propostaNova}/contract/sign`, g.ana, { textHash });
+
+      const primeira = await corpoDe(chamar('POST', `/api/v1/orders/${pedidoNovo}/payment`, dono));
+      const externoAntigo = (await pglite.query<{ id_externo: string }>(`select id_externo from pagamentos where id = '${primeira.id}'`)).rows[0]!.id_externo;
+      gateway.statusPorId.set(externoAntigo, 'EXPIRED');
+      expect((await chamar('GET', `/api/v1/orders/${pedidoNovo}/payment`, dono)).json().status).toBe('Expired');
+
+      const segunda = await corpoDe(chamar('POST', `/api/v1/orders/${pedidoNovo}/payment`, dono));
+      expect(segunda.status).toBe('Pending');
+      expect(segunda.id).not.toBe(primeira.id);
+
+      expect((await webhook(externoAntigo)).statusCode).toBe(200);
+      const estados = (await pglite.query<{ id: string; status: string }>(`select id, status from pagamentos where id_pedido = '${pedidoNovo}' order by data_criacao`)).rows;
+      expect(estados).toEqual([{ id: primeira.id, status: 'pago' }, { id: segunda.id, status: 'cancelado' }]);
+      expect((await chamar('GET', `/api/v1/orders/${pedidoNovo}`, dono)).json().status).toBe('InProgress');
     });
   });
 

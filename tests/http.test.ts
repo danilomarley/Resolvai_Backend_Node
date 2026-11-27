@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { SignJWT } from 'jose';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -19,6 +19,7 @@ import { PropostaService } from '../src/application/services/proposta-service.js
 import { PrestadorService, type IPrestadorRepository } from '../src/application/services/prestador-service.js';
 import { PropostaPrestadorService, type IPropostaPrestadorRepository } from '../src/application/services/proposta-prestador-service.js';
 import { UserService } from '../src/application/services/user-service.js';
+import { chavePublicaAbacatePay } from '../src/domain/pagamento.js';
 import { Email } from '../src/domain/email.js';
 import { UserRole } from '../src/domain/enums.js';
 import { User } from '../src/domain/user.js';
@@ -224,6 +225,48 @@ describe('API HTTP', () => {
       const lista = await get('/api/v1/users', adminId);
       expect(lista.statusCode).toBe(200);
       expect(lista.json()).toHaveLength(2);
+    });
+  });
+
+  describe('webhook de pagamento (#96)', () => {
+    const corpo = JSON.stringify({ event: 'transparent.completed', data: { transparent: { id: 'pix_char_http', status: 'PAID' } } });
+    const assinatura = (texto: string) => createHmac('sha256', chavePublicaAbacatePay).update(texto).digest('base64');
+    const enviar = (texto: string, headers: Record<string, string>, query = '') =>
+      app.inject({ method: 'POST', url: `/api/v1/webhooks/abacatepay${query}`, headers: { 'content-type': 'application/json', ...headers }, payload: texto });
+
+    it('é público: aceita segredo e assinatura sem token de usuário e confirma o pagamento', async () => {
+      const resposta = await enviar(corpo, { 'x-webhook-secret': segredoWebhook, 'x-webhook-signature': assinatura(corpo) });
+      expect(resposta.statusCode).toBe(200);
+      expect(resposta.json()).toEqual({ ok: true });
+      expect(pagamentos.confirmados).toContain('pix_char_http');
+    });
+
+    it('aceita o segredo pela query string, como a AbacatePay envia', async () => {
+      pagamentos.confirmados.length = 0;
+      const resposta = await enviar(corpo, { 'x-webhook-signature': assinatura(corpo) }, `?webhookSecret=${segredoWebhook}`);
+      expect(resposta.statusCode).toBe(200);
+      expect(pagamentos.confirmados).toEqual(['pix_char_http']);
+    });
+
+    it('confere a assinatura no corpo bruto: o mesmo JSON com espaços a mais é recusado', async () => {
+      pagamentos.confirmados.length = 0;
+      const reformatado = JSON.stringify(JSON.parse(corpo), null, 2);
+      const resposta = await enviar(reformatado, { 'x-webhook-secret': segredoWebhook, 'x-webhook-signature': assinatura(corpo) });
+      expect(resposta.statusCode).toBe(401);
+      expect(pagamentos.confirmados).toHaveLength(0);
+    });
+
+    it('recusa segredo errado e ausência de assinatura com 401', async () => {
+      expect((await enviar(corpo, { 'x-webhook-secret': 'errado', 'x-webhook-signature': assinatura(corpo) })).statusCode).toBe(401);
+      expect((await enviar(corpo, { 'x-webhook-secret': segredoWebhook })).statusCode).toBe(401);
+      expect((await enviar(corpo, {})).statusCode).toBe(401);
+    });
+
+    it('as rotas do contratante exigem login', async () => {
+      const id = randomUUID();
+      for (const [method, url] of [['POST', `/api/v1/orders/${id}/payment`], ['GET', `/api/v1/orders/${id}/payment`], ['POST', `/api/v1/orders/${id}/payment/simulate`]] as const) {
+        expect((await app.inject({ method, url })).statusCode).toBe(401);
+      }
     });
   });
 

@@ -206,7 +206,7 @@ describe('AbacatePayClient', () => {
 
     for (const http of [recusa, rede]) {
       const client = new AbacatePayClient({ apiKey: 'abc_dev_segredo', baseUrl: 'https://api.exemplo/v2' }, http);
-      const erro = await client.consultar('x').catch(e => e as Error);
+      const erro = (await client.consultar('x').catch((e: unknown) => e)) as Error;
       expect(erro).toBeInstanceOf(ServicoIndisponivelException);
       expect(erro.message).not.toContain('not available');
       expect(erro.message).not.toContain('abc_dev_segredo');
