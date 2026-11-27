@@ -174,5 +174,23 @@ export function pedidosRoutes(
         return pedidoService.cancelar(request.usuario, id, request.body);
       }
     });
+
+    rotas.post('/api/v1/orders/:id/complete', {
+      schema: {
+        tags: ['Pedidos'],
+        summary: 'Confirma a conclusão do serviço (Resolvai_Cliente#92).',
+        description:
+          'O contratante confirma que o serviço foi feito. Só vale para pedido InProgress, isto é, com o pagamento confirmado (409 caso contrário). ' +
+          'Depois disso o pedido fica Completed e pode ser avaliado. Retorna 404 quando o pedido não existe ou pertence a outro usuário.',
+        params: pedidoIdParamsSchema,
+        response: { 200: pedidoResponseSchema }
+      },
+      handler: async (request, reply) => {
+        const id = guidDaRota(request, reply);
+        if (!id) return reply;
+        semCache(reply);
+        return pedidoService.concluir(request.usuario, id);
+      }
+    });
   };
 }

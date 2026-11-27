@@ -61,11 +61,13 @@ export interface IPedidoRepository {
   update(id: string, idCliente: string, escopoJson: string, fotos: NovaFotoPedidoRequest[]): Promise<ResultadoAlteracaoPedido>;
   /** Cancela um pedido aberto, sem proposta aceita, e libera as propostas pendentes (#85). */
   cancel(id: string, idCliente: string, motivo: string | null): Promise<ResultadoAlteracaoPedido>;
+  /** O contratante confirma que o servico foi feito: pedido em andamento (pago) vira concluido (#92). */
+  complete(id: string, idCliente: string): Promise<ResultadoAlteracaoPedido>;
 }
 
 /**
  * notFound: o pedido não existe ou é de outro cliente. closed: já foi cancelado, concluído ou está em andamento.
- * proposalChosen: o cliente já aceitou uma proposta.
+ * proposalChosen: o cliente já aceitou uma proposta. Na conclusão, closed é qualquer pedido que não está em andamento.
  */
 export type ResultadoAlteracaoPedido = 'ok' | 'notFound' | 'closed' | 'proposalChosen';
 

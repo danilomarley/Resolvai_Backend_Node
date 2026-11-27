@@ -207,6 +207,14 @@ export class FakePedidoRepository implements IPedidoRepository {
     this.lastCancelReason = motivo;
     return this.result;
   }
+
+  completed = 0;
+
+  async complete(_id: string, idCliente: string) {
+    this.completed++;
+    this.lastClienteId = idCliente;
+    return this.result;
+  }
 }
 
 export class FakeUsers implements IUserRepository {

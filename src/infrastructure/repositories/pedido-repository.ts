@@ -69,6 +69,26 @@ export class PedidoRepository implements IPedidoRepository {
       return 'ok';
     });
   }
+
+  /** Conclui o pedido em andamento do cliente. O status em_andamento so existe depois do pagamento confirmado. */
+  async complete(id: string, idCliente: string): Promise<ResultadoAlteracaoPedido> {
+    return this.database.transaction(async sql => {
+      const [pedido] = await sql.query<{ status: string }>(
+        'select status as "status" from public.pedidos where id = $1 and id_cliente = $2 for update;',
+        [id, idCliente]
+      );
+      if (!pedido) {
+        return 'notFound';
+      }
+
+      if (pedido.status !== 'em_andamento') {
+        return 'closed';
+      }
+
+      await sql.query("update public.pedidos set status = 'concluido', data_atualizacao = now() where id = $1;", [id]);
+      return 'ok';
+    });
+  }
 }
 
 /**

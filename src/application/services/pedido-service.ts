@@ -61,6 +61,20 @@ export class PedidoService {
     return this.getById(currentUser, id);
   }
 
+  /** O contratante confirma a conclusao do servico; so vale para pedido em andamento, ou seja, ja pago (#92). */
+  async concluir(currentUser: CurrentUser, id: string): Promise<PedidoResponse> {
+    const resultado = await this.pedidoRepository.complete(id, getUserId(currentUser));
+    if (resultado === 'notFound') {
+      throw new NotFoundException('Pedido', id);
+    }
+
+    if (resultado !== 'ok') {
+      throw new ConflictException('Só é possível concluir um pedido em andamento, com o pagamento confirmado.');
+    }
+
+    return this.getById(currentUser, id);
+  }
+
   // Os limites de página são validados no schema da rota (listarPedidosQuerySchema).
   async list(currentUser: CurrentUser, query: ListarPedidosQuery): Promise<PaginaResponse<PedidoResumoResponse>> {
     return this.pedidos.list(getUserId(currentUser), query.status, query.page, query.pageSize);
