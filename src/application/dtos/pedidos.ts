@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { statusPedidos, statusPropostas } from '../../domain/enums.js';
+import { estagiosPedido, statusPedidos, statusPropostas } from '../../domain/enums.js';
 import { paginaResponseSchema } from './common.js';
 import { dataIso, obrigatorio, tamanho, textoObrigatorio, textoOpcional, url } from './validacao.js';
 
@@ -107,7 +107,11 @@ export const pedidoResumoResponseSchema = z.object({
   createdAt: dataIso,
   updatedAt: dataIso.optional(),
   proposalsCount: z.number().int(),
-  chosenProposalValue: z.number().optional()
+  chosenProposalValue: z.number().optional(),
+  stage: z
+    .enum(estagiosPedido)
+    .optional()
+    .describe('Só em pedido Pending com proposta aceita: AwaitingSignatures até as duas partes assinarem o contrato, depois AwaitingPayment.')
 });
 
 export type PedidoResumoResponse = z.infer<typeof pedidoResumoResponseSchema>;
@@ -158,6 +162,10 @@ export const pedidoResponseSchema = z.object({
   updatedAt: dataIso.optional(),
   scope: z.unknown().optional().describe('Conteúdo completo de pedidos.escopo.'),
   cancellationReason: z.string().optional().describe('Motivo informado pelo cliente ao cancelar o pedido, se houver.'),
+  stage: z
+    .enum(estagiosPedido)
+    .optional()
+    .describe('Só em pedido Pending com proposta aceita: AwaitingSignatures até as duas partes assinarem o contrato, depois AwaitingPayment.'),
   photos: z.array(fotoPedidoResponseSchema),
   proposals: z.array(propostaResponseSchema)
 });

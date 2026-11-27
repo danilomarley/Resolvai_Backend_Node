@@ -1697,6 +1697,14 @@ describe('Integração com PostgreSQL', () => {
         payload: corpo
       });
     };
+    // Estagio no detalhe e na lista (Seus Pedidos), que precisam concordar.
+    const estagios = async (x: number, sub = g.cliente) => {
+      const detalhe = await corpoDe(chamar('GET', `/api/v1/orders/${ped(x)}`, sub));
+      const lista = await corpoDe(chamar('GET', '/api/v1/orders?pageSize=50', sub));
+      const item = lista.items.find((i: { id: string }) => i.id === ped(x));
+      expect(item.stage).toBe(detalhe.stage);
+      return detalhe.stage as string | undefined;
+    };
     const statusPedido = async (x: number) => (await pglite.query<{ status: string }>(`select status from pedidos where id = '${ped(x)}'`)).rows[0]!.status;
 
     // Aceita a proposta e leva o contrato ate Signed (as duas partes assinam).
@@ -1730,7 +1738,9 @@ describe('Integração com PostgreSQL', () => {
       expect((await chamar('POST', url(3), g.cliente)).statusCode).toBe(404);
       expect((await chamar('GET', url(1), g.cliente)).statusCode).toBe(404);
 
+      expect(await estagios(1)).toBeUndefined();
       await contratoAssinado(1, false);
+      expect(await estagios(1)).toBe('AwaitingSignatures');
       const antes = await chamar('POST', url(1), g.cliente);
       expect(antes.statusCode).toBe(409);
       expect(antes.json().detail).toContain('duas partes assinarem');
@@ -1741,6 +1751,7 @@ describe('Integração com PostgreSQL', () => {
       const { textHash } = await corpoDe(chamar('GET', `/api/v1/orders/${ped(1)}/contract`, g.cliente));
       expect((await chamar('POST', `/api/v1/provider/proposals/${prop(1)}/contract/sign`, g.ana, { textHash })).statusCode).toBe(200);
 
+      expect(await estagios(1)).toBe('AwaitingPayment');
       const primeiro = await chamar('POST', url(1), g.cliente);
       expect(primeiro.statusCode).toBe(200);
       expect(primeiro.json()).toMatchObject({ orderId: ped(1), method: 'Pix', status: 'Pending', amount: 800, testMode: true, qrCodeBase64: 'data:image/png;base64,AAAA' });
@@ -1779,6 +1790,8 @@ describe('Integração com PostgreSQL', () => {
       expect(pago.json()).toMatchObject({ id: cobranca.id, status: 'Paid', paidAt: expect.any(String) });
       expect(await statusPedido(1)).toBe('em_andamento');
       expect((await corpoDe(chamar('GET', `/api/v1/orders/${ped(1)}`, g.cliente))).status).toBe('InProgress');
+      // Pago, o estagio some: o proprio status (InProgress) diz onde o pedido esta.
+      expect(await estagios(1)).toBeUndefined();
 
       expect((await chamar('POST', url(1), g.cliente)).json().detail).toContain('já foi pago');
       expect((await chamar('POST', url(1, '/simulate'), g.cliente)).statusCode).toBe(409);
