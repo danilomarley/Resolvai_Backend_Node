@@ -1863,6 +1863,75 @@ describe('Integração com PostgreSQL', () => {
     });
   });
 
+  describe('filtro da lista por estágio (#108)', () => {
+    const h = { dono: 'c1000000-0000-4000-8000-000000000001', ana: 'c1000000-0000-4000-8000-0000000000a1' };
+    const ped = (x: number) => `c2000000-0000-4000-8000-00000000000${x}`;
+    const prop = (x: number) => `c3000000-0000-4000-8000-00000000000${x}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ids = async (query: string) => ((await (await chamar('GET', `/api/v1/orders${query}`, h.dono)).json()) as any).items.map((i: { id: string }) => i.id).sort();
+    const contrato = (x: number, status: 'pendente' | 'assinado') =>
+      `insert into contratos (id_pedido, id_proposta, id_cliente, id_prestador, versao_modelo, texto, texto_hash, valor, status, assinado_cliente_em, assinado_prestador_em)
+       values ('${ped(x)}', '${prop(x)}', '${h.dono}', '${h.ana}', 'v', 't', repeat('a', 64), 100, '${status}', ${status === 'assinado' ? 'now()' : 'null'}, ${status === 'assinado' ? 'now()' : 'null'});`;
+
+    beforeAll(async () => {
+      await pglite.exec(`
+        insert into users (id, name, email, role, cpf, created_at) values
+          ('${h.dono}', 'Dono Filtro', 'dono108@teste.com', 'Cliente', '10800000011', now()),
+          ('${h.ana}', 'Ana Filtro', 'ana108@teste.com', 'Prestador', '10800000033', now());
+        insert into pedidos (id, id_cliente, escopo, status) values
+          ('${ped(1)}', '${h.dono}', '{"titulo":"Aberto sem proposta"}', 'aberto'),
+          ('${ped(2)}', '${h.dono}', '{"titulo":"Aberto com proposta enviada"}', 'aberto'),
+          ('${ped(3)}', '${h.dono}', '{"titulo":"Aceito sem contrato ainda"}', 'aberto'),
+          ('${ped(4)}', '${h.dono}', '{"titulo":"Aceito, contrato pendente"}', 'aberto'),
+          ('${ped(5)}', '${h.dono}', '{"titulo":"Aceito, contrato assinado"}', 'aberto'),
+          ('${ped(6)}', '${h.dono}', '{"titulo":"Em andamento"}', 'em_andamento'),
+          ('${ped(7)}', '${h.dono}', '{"titulo":"Cancelado"}', 'cancelado');
+        insert into propostas (id, id_pedido, id_prestador, status, valor, prazo, prazo_dias) values
+          ('${prop(2)}', '${ped(2)}', '${h.ana}', 'enviada', 100, '1 dia', 1),
+          ('${prop(3)}', '${ped(3)}', '${h.ana}', 'escolhida', 100, '1 dia', 1),
+          ('${prop(4)}', '${ped(4)}', '${h.ana}', 'escolhida', 100, '1 dia', 1),
+          ('${prop(5)}', '${ped(5)}', '${h.ana}', 'escolhida', 100, '1 dia', 1),
+          ('${prop(6)}', '${ped(6)}', '${h.ana}', 'escolhida', 100, '1 dia', 1);
+        ${contrato(4, 'pendente')}
+        ${contrato(5, 'assinado')}
+      `);
+    });
+
+    it('Open traz só os pedidos abertos sem proposta aceita, e a proposta apenas enviada não tira o pedido de Open', async () => {
+      expect(await ids('?stage=Open')).toEqual([ped(1), ped(2)]);
+    });
+
+    it('AwaitingSignatures inclui o aceito sem contrato gerado ainda e o de contrato pendente', async () => {
+      expect(await ids('?stage=AwaitingSignatures')).toEqual([ped(3), ped(4)]);
+    });
+
+    it('AwaitingPayment traz só o contrato assinado pelas duas partes', async () => {
+      expect(await ids('?stage=AwaitingPayment')).toEqual([ped(5)]);
+    });
+
+    it('combina com o status, sem diferenciar maiúsculas, e estágio em pedido fora de Pending não existe', async () => {
+      expect(await ids('?status=Pending&stage=Open')).toEqual([ped(1), ped(2)]);
+      expect(await ids('?status=pending&stage=awaitingpayment')).toEqual([ped(5)]);
+      expect(await ids('?status=InProgress&stage=AwaitingPayment')).toEqual([]);
+      expect(await ids('?status=Cancelled&stage=Open')).toEqual([]);
+      // Sem stage nada muda: todos os pedidos do usuário.
+      expect(await ids('?pageSize=50')).toHaveLength(7);
+    });
+
+    it('a paginação conta só os pedidos do filtro', async () => {
+      const pagina = (await chamar('GET', '/api/v1/orders?stage=AwaitingSignatures&pageSize=1', h.dono)).json();
+      expect(pagina).toMatchObject({ totalItems: 2, totalPages: 2, page: 1, pageSize: 1 });
+      expect(pagina.items).toHaveLength(1);
+      expect((await chamar('GET', '/api/v1/orders?stage=AwaitingSignatures&pageSize=1&page=2', h.dono)).json().items).toHaveLength(1);
+    });
+
+    it('o filtro vale só para os pedidos do próprio usuário', async () => {
+      const outro = randomUUID();
+      await database.query("insert into users (id, name, email, role) values ($1, 'Outro 108', 'outro108@teste.com', 'Cliente')", [outro]);
+      expect((await (await chamar('GET', '/api/v1/orders?stage=Open', outro)).json()).items).toEqual([]);
+    });
+  });
+
   describe('avaliação pós-serviço (#92)', () => {
     const outroAvaliador = randomUUID();
     beforeAll(async () => {
