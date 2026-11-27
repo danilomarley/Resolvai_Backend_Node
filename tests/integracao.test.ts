@@ -24,6 +24,8 @@ import { AvaliacaoService } from '../src/application/services/avaliacao-service.
 import { AvaliacaoRepository } from '../src/infrastructure/repositories/avaliacao-repository.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { ContratoService } from '../src/application/services/contrato-service.js';
+import { PagamentoService } from '../src/application/services/pagamento-service.js';
+import { PagamentoRepository } from '../src/infrastructure/repositories/pagamento-repository.js';
 import { ContratoRepository } from '../src/infrastructure/repositories/contrato-repository.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
@@ -39,7 +41,7 @@ import { PropostaRepository } from '../src/infrastructure/repositories/proposta-
 import { PrestadorRepository } from '../src/infrastructure/repositories/prestador-repository.js';
 import { PropostaPrestadorRepository } from '../src/infrastructure/repositories/proposta-prestador-repository.js';
 import { UserRepository } from '../src/infrastructure/repositories/user-repository.js';
-import { FakeArmazenamento, FakeAssistente, FakeSupabase } from './fakes.js';
+import { FakeArmazenamento, FakeAssistente, FakeGatewayPagamento, FakeSupabase } from './fakes.js';
 
 // PostgreSQL real (PGlite, em memória) com os mesmos scripts de db/scripts, acessado pelo driver pg da API.
 const issuer = 'https://projeto-teste.supabase.co/auth/v1';
@@ -84,6 +86,8 @@ describe('Integração com PostgreSQL', () => {
   const supabase = new FakeSupabase();
   const armazenamento = new FakeArmazenamento();
   const assistente = new FakeAssistente();
+  const gateway = new FakeGatewayPagamento();
+  const segredoWebhook = 'segredo-do-webhook-de-teste-com-mais-de-32-caracteres';
 
   const chamar = async (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, sub: string, payload?: unknown, email?: string) =>
     app.inject({ method, url, payload: payload as object, headers: { authorization: `Bearer ${await token(sub, email)}` } });
@@ -164,6 +168,7 @@ describe('Integração com PostgreSQL', () => {
         userService: new UserService(users, new EnderecoRepository(database), new ContatoRepository(database), supabase),
         pedidoService: new PedidoService(new PedidoQueries(database), new PedidoRepository(database), users),
         contratoService: new ContratoService(new ContratoRepository(database)),
+        pagamentoService: new PagamentoService(new PagamentoRepository(database), gateway, segredoWebhook),
         propostaService: new PropostaService(new PropostaRepository(database), new PedidoQueries(database)),
         prestadorService: new PrestadorService(new PrestadorRepository(database), users, fornecedores),
         propostaPrestadorService: new PropostaPrestadorService(new PropostaPrestadorRepository(database), fornecedorService, armazenamento),

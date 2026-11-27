@@ -13,6 +13,7 @@ import { PropostaFornecedorService } from '../src/application/services/proposta-
 import type { IPropostaFornecedorRepository } from '../src/application/dtos/propostas-fornecedor.js';
 import { FotoPedidoService } from '../src/application/services/foto-pedido-service.js';
 import { ContratoService } from '../src/application/services/contrato-service.js';
+import { PagamentoService } from '../src/application/services/pagamento-service.js';
 import { PedidoService } from '../src/application/services/pedido-service.js';
 import { PropostaService } from '../src/application/services/proposta-service.js';
 import { PrestadorService, type IPrestadorRepository } from '../src/application/services/prestador-service.js';
@@ -29,6 +30,8 @@ import {
   FakeFornecedores,
   FakeEnderecos,
   FakeContratoRepository,
+  FakePagamentoRepository,
+  FakeGatewayPagamento,
   FakePedidoRepository,
   FakePropostaRepository,
   FakeQueries,
@@ -58,6 +61,9 @@ describe('API HTTP', () => {
   let queries: FakeQueries;
   let propostas: FakePropostaRepository;
   let supabase: FakeSupabase;
+  let pagamentos: FakePagamentoRepository;
+  let gateway: FakeGatewayPagamento;
+  const segredoWebhook = 'segredo-do-webhook-de-teste-com-mais-de-32-caracteres';
   const clienteId = randomUUID();
   const adminId = randomUUID();
 
@@ -65,6 +71,8 @@ describe('API HTTP', () => {
     users = new FakeUsers();
     queries = new FakeQueries();
     propostas = new FakePropostaRepository();
+    pagamentos = new FakePagamentoRepository();
+    gateway = new FakeGatewayPagamento();
     supabase = new FakeSupabase();
     const fornecedores = new FakeFornecedores();
     const especialidades = new FakeEspecialidades();
@@ -80,6 +88,7 @@ describe('API HTTP', () => {
         userService: new UserService(users, new FakeEnderecos(), new FakeContatos(), supabase),
         pedidoService: new PedidoService(queries, new FakePedidoRepository(), users),
         contratoService: new ContratoService(new FakeContratoRepository()),
+        pagamentoService: new PagamentoService(pagamentos, gateway, segredoWebhook),
         propostaService: new PropostaService(propostas, queries),
         prestadorService: new PrestadorService({ async listCategorias() { return []; } } as unknown as IPrestadorRepository, users),
         propostaPrestadorService: new PropostaPrestadorService({} as unknown as IPropostaPrestadorRepository, fornecedorService),

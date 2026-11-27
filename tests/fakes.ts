@@ -22,6 +22,15 @@ import type { NovaFotoPedidoRequest, PedidoResponse, PedidoResumoResponse, Propo
 import type { ContratoResponse } from '../src/application/dtos/contratos.js';
 import type { IContratoRepository, ResultadoAssinatura } from '../src/application/services/contrato-service.js';
 import type {
+  CobrancaPix,
+  ContratoParaCobranca,
+  IGatewayPagamento,
+  IPagamentoRepository,
+  NovaCobrancaPix,
+  NovoPagamento,
+  PagamentoRow
+} from '../src/application/services/pagamento-service.js';
+import type {
   DirecaoPropostas,
   OrdenacaoPropostas,
   PropostaDetalheResponse,
@@ -35,7 +44,7 @@ import type { StatusPedido, UserRole } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
 import type { Fornecedor } from '../src/domain/fornecedor.js';
 import type { FornecedorResponse } from '../src/application/dtos/fornecedores.js';
-import { UnauthorizedException } from '../src/application/errors.js';
+import { ServicoIndisponivelException, UnauthorizedException } from '../src/application/errors.js';
 
 export const usuario = (id?: string, extra: Partial<CurrentUser> = {}): CurrentUser => ({
   isAuthenticated: true,
@@ -356,5 +365,83 @@ export class FakeFornecedores implements IFornecedorRepository {
   }
   async completeExisting(user: User, fornecedor: Fornecedor, contato: Contato, especialidades: string[]) {
     return this.addComplete(user, fornecedor, contato, especialidades);
+  }
+}
+
+/** Repositorio de pagamentos em memoria: so guarda o que os testes do webhook e do servico precisam ver. */
+export class FakePagamentoRepository implements IPagamentoRepository {
+  contrato: ContratoParaCobranca | null = null;
+  atual: PagamentoRow | null = null;
+  inseridos: NovoPagamento[] = [];
+  confirmados: string[] = [];
+  encerrados: { externalId: string; status: string }[] = [];
+
+  async getContratoParaCobranca() {
+    return this.contrato;
+  }
+
+  async getAtual() {
+    return this.atual;
+  }
+
+  async inserir(pagamento: NovoPagamento) {
+    this.inseridos.push(pagamento);
+    this.atual = {
+      id: pagamento.id,
+      orderId: pagamento.orderId,
+      customerId: pagamento.customerId,
+      status: 'pendente',
+      valueCents: pagamento.valueCents,
+      externalId: pagamento.externalId,
+      brCode: pagamento.brCode,
+      qrCodeBase64: pagamento.qrCodeBase64,
+      testMode: pagamento.testMode,
+      expiresAt: pagamento.expiresAt,
+      paidAt: null,
+      createdAt: new Date()
+    };
+  }
+
+  async encerrar(externalId: string, status: 'expirado' | 'cancelado') {
+    this.encerrados.push({ externalId, status });
+    if (this.atual?.externalId === externalId) this.atual = { ...this.atual, status };
+  }
+
+  async confirmar(externalId: string) {
+    this.confirmados.push(externalId);
+    if (this.atual?.externalId === externalId) this.atual = { ...this.atual, status: 'pago', paidAt: new Date() };
+    return true;
+  }
+}
+
+/** Gateway de pagamento de mentira: o status de cada cobranca e controlado pelo teste. */
+export class FakeGatewayPagamento implements IGatewayPagamento {
+  ambienteTeste = true;
+  criadas: NovaCobrancaPix[] = [];
+  consultas: string[] = [];
+  simuladas: string[] = [];
+  statusPorId = new Map<string, string>();
+  falhaNaConsulta = false;
+  private contador = 0;
+
+  async criarPix(nova: NovaCobrancaPix): Promise<CobrancaPix> {
+    this.criadas.push(nova);
+    const id = `pix_char_teste${++this.contador}`;
+    this.statusPorId.set(id, 'PENDING');
+    return { id, status: 'PENDING', brCode: `00020101021226pix-teste-${this.contador}`, qrCodeBase64: 'data:image/png;base64,AAAA', expiraEm: new Date(Date.now() + 1800_000) };
+  }
+
+  async consultar(id: string) {
+    this.consultas.push(id);
+    if (this.falhaNaConsulta) {
+      throw new ServicoIndisponivelException('fora do ar');
+    }
+
+    return { status: this.statusPorId.get(id) ?? 'PENDING' };
+  }
+
+  async simularPagamento(id: string) {
+    this.simuladas.push(id);
+    this.statusPorId.set(id, 'PAID');
   }
 }
