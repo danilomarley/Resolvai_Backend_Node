@@ -51,11 +51,13 @@ export class PagamentoRepository implements IPagamentoRepository {
     return row ?? null;
   }
 
+  // Dois pedidos de Pix ao mesmo tempo: o indice de cobranca ativa deixa so um, e o outro cai no conflito.
   async inserir(pagamento: NovoPagamento): Promise<void> {
     await this.database.query(
       `insert into public.pagamentos
          (id, id_pedido, id_contrato, id_cliente, valor_centavos, id_externo, br_code, qr_code_base64, ambiente_teste, expira_em)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);`,
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       on conflict do nothing;`,
       [
         pagamento.id,
         pagamento.orderId,
