@@ -321,6 +321,21 @@ describe('API HTTP', () => {
       expect(Object.keys(corpo.errors).sort()).toEqual(['Page', 'PageSize', 'Status']);
     });
 
+    it('o filtro stage aceita qualquer caixa, chega à consulta e valor inválido responde 400', async () => {
+      const resposta = await get('/api/v1/orders?status=pending&stage=awaitingpayment', clienteId);
+      expect(resposta.statusCode).toBe(200);
+      expect(queries.lastStatus).toBe('Pending');
+      expect(queries.lastStage).toBe('AwaitingPayment');
+      expect((await get('/api/v1/orders?stage=OPEN', clienteId)).statusCode).toBe(200);
+      expect(queries.lastStage).toBe('Open');
+      await get('/api/v1/orders', clienteId);
+      expect(queries.lastStage).toBeUndefined();
+
+      const invalido = await get('/api/v1/orders?stage=Foo', clienteId);
+      expect(invalido.statusCode).toBe(400);
+      expect(Object.keys(invalido.json().errors)).toEqual(['Stage']);
+    });
+
     it('validação de corpo usa caminhos aninhados', async () => {
       const resposta = await app.inject({
         method: 'POST',

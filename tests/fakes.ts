@@ -40,7 +40,7 @@ import type { IPropostaRepository, ResultadoAceite } from '../src/application/se
 import type { Contato } from '../src/domain/contato.js';
 import type { Email } from '../src/domain/email.js';
 import type { Endereco } from '../src/domain/endereco.js';
-import type { StatusPedido, UserRole } from '../src/domain/enums.js';
+import type { FiltroEstagio, StatusPedido, UserRole } from '../src/domain/enums.js';
 import type { User } from '../src/domain/user.js';
 import type { Fornecedor } from '../src/domain/fornecedor.js';
 import type { FornecedorResponse } from '../src/application/dtos/fornecedores.js';
@@ -74,8 +74,10 @@ export class FakeQueries implements IPedidoQueries {
   lastUserId?: string;
   calls = 0;
 
-  async list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number) {
-    [this.lastStatus, this.lastPage, this.lastPageSize] = [status, page, pageSize];
+  lastStage?: FiltroEstagio;
+
+  async list(userId: string, status: StatusPedido | undefined, page: number, pageSize: number, stage?: FiltroEstagio) {
+    [this.lastStatus, this.lastPage, this.lastPageSize, this.lastStage] = [status, page, pageSize, stage];
     this.record(userId);
     return this.pagina;
   }
