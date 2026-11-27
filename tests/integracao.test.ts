@@ -1809,6 +1809,31 @@ describe('Integração com PostgreSQL', () => {
       expect((await pglite.query(`select count(*)::int as n from pagamentos where id_pedido = '${ped(2)}' and status = 'pago'`)).rows).toEqual([{ n: 1 }]);
     });
 
+    it('o contratante conclui o serviço pago e só então pode avaliá-lo', async () => {
+      const concluir = (x: number, sub: string) => chamar('POST', `/api/v1/orders/${ped(x)}/complete`, sub);
+
+      expect((await app.inject({ method: 'POST', url: `/api/v1/orders/${ped(1)}/complete` })).statusCode).toBe(401);
+      expect((await chamar('POST', '/api/v1/orders/abc/complete', g.cliente)).statusCode).toBe(404);
+      expect((await concluir(1, g.outro)).statusCode).toBe(404);
+
+      // Sem pagamento (pedido aberto) nao conclui, e pedido em andamento ainda nao pode ser avaliado.
+      const semPagar = await concluir(3, g.cliente);
+      expect(semPagar.statusCode).toBe(409);
+      expect(semPagar.json().detail).toContain('em andamento');
+      expect((await chamar('POST', `/api/v1/orders/${ped(1)}/review`, g.cliente, { rating: 5 })).statusCode).toBe(400);
+
+      const concluido = await concluir(1, g.cliente);
+      expect(concluido.statusCode).toBe(200);
+      expect(concluido.json()).toMatchObject({ id: ped(1), status: 'Completed' });
+      expect(concluido.json().stage).toBeUndefined();
+      expect(concluido.headers['cache-control']).toBe('no-store,no-cache');
+      expect((await concluir(1, g.cliente)).statusCode).toBe(409);
+      // O pagamento segue registrado como pago.
+      expect((await chamar('GET', url(1), g.cliente)).json().status).toBe('Paid');
+
+      expect((await chamar('POST', `/api/v1/orders/${ped(1)}/review`, g.cliente, { rating: 5, comment: 'Serviço excelente' })).statusCode).toBe(201);
+    });
+
     it('Pix pago depois de expirar vale: a cobrança nova pendente é cancelada e o pedido segue', async () => {
       const dono = g.cliente;
       const pedidoNovo = 'b2000000-0000-4000-8000-0000000000f4';
