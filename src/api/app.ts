@@ -23,6 +23,8 @@ import { homeRoutes } from './routes/home-routes.js';
 import { pedidosRoutes } from './routes/pedidos-routes.js';
 import { propostasRoutes } from './routes/propostas-routes.js';
 import { contratosRoutes } from './routes/contratos-routes.js';
+import { pagamentosRoutes, pagamentosWebhookRoutes } from './routes/pagamentos-routes.js';
+import type { PagamentoService } from '../application/services/pagamento-service.js';
 import type { ContratoService } from '../application/services/contrato-service.js';
 import { prestadorRoutes } from './routes/prestador-routes.js';
 import { usersRoutes } from './routes/users-routes.js';
@@ -41,6 +43,7 @@ export interface Dependencias {
   pedidoService: PedidoService;
   propostaService: PropostaService;
   contratoService: ContratoService;
+  pagamentoService: PagamentoService;
   prestadorService: PrestadorService;
   propostaPrestadorService: PropostaPrestadorService;
   fotoPedidoService: FotoPedidoService;
@@ -115,6 +118,8 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
   await app.register(fastifyMultipart, { limits: { fileSize: tamanhoMaximoFoto, files: 1, fields: 5, parts: 6 } });
 
   await app.register(authRoutes(dependencias.authService, dependencias.verificarToken, dependencias.userRepository, corsAllowedOrigins));
+  // Publico: a AbacatePay chama com segredo e assinatura, nao com token de usuario.
+  await app.register(pagamentosWebhookRoutes(dependencias.pagamentoService));
   await app.register(fornecedoresPublicRoutes(dependencias.fornecedorService, dependencias.especialidadeQueries));
 
   // Protegido por padrão: tudo registrado aqui exige Bearer token válido.
@@ -130,6 +135,7 @@ export async function buildApp({ dependencias, corsAllowedOrigins = [], logger =
     await protegido.register(pedidosRoutes(dependencias.pedidoService, dependencias.fotoPedidoService, dependencias.assistentePedidoService));
     await protegido.register(propostasRoutes(dependencias.propostaService));
     await protegido.register(contratosRoutes(dependencias.contratoService));
+    await protegido.register(pagamentosRoutes(dependencias.pagamentoService));
     await protegido.register(prestadorRoutes(dependencias.prestadorService, dependencias.propostaPrestadorService));
     await protegido.register(homeRoutes(dependencias.pedidoService));
     await protegido.register(avaliacoesRoutes(dependencias.avaliacaoService));
